@@ -48,3 +48,15 @@ export const PlaySound = (url: string): void => {
     globalScope.PlaySound(url);
   }
 };
+
+export const ShowPopup = (text: string): void => {
+  if (typeof Game?.Popup === "function") {
+    Game.Popup(text);
+    return;
+  }
+  if (typeof Game?.Notify === "function") {
+    Game.Notify("Cookie Payback Planner", text);
+    return;
+  }
+  console.log(`[CPP popup] ${text}`);
+};

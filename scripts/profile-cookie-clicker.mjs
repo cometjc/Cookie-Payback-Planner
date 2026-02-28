@@ -1,5 +1,7 @@
 import process from "node:process";
+import { loadProjectEnv } from "./env-runtime.mjs";
 
+loadProjectEnv();
 const debugOrigin = process.env.COOKIE_REMOTE_DEBUG_URL || "http://127.0.0.1:9222";
 const sampleMs = Number.parseInt(process.env.COOKIE_PROFILE_MS || "12000", 10);
 

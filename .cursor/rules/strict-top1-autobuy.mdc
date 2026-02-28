@@ -1,0 +1,33 @@
+---
+description: Enforce strict top1 auto-buy optimal waiting policy
+globs: src/core/**/*.ts
+alwaysApply: false
+---
+
+# Strict Top 1 (1st) Auto Buy
+
+`Auto buy` must follow top 1 (1st) optimal strategy: buy only the current top-ranked candidate, or wait.
+
+- Do not add fallback purchase paths (e.g. 2nd-4th candidate) when top1 is not immediately buyable.
+- Do not add "regret time", "acceptable detour", or similar heuristics that permit buying non-top1 options.
+- If top1 cannot be bought now, return/skip and wait for recalculation; never force a substitute buy.
+- Chain buying is allowed only for the same top1 target (e.g. buy-to amount), not for alternative candidates.
+
+## Implementation Check
+
+Before finishing changes in `src/core/**/*.ts`, verify:
+
+- Decision path uses only `top1` as the buy candidate.
+- No config or UI field implies fallback-to-other-candidates behavior.
+- Any new optimization keeps the objective function consistent with "wait is part of optimal value".
+
+## Examples
+
+```ts
+// ❌ BAD: top1 invalid => buy another candidate
+if (!top1Valid) candidate = fallbackFromTopK;
+
+// ✅ GOOD: top1 invalid => wait
+if (!top1Valid) return;
+candidate = top1;
+```

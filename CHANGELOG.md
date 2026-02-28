@@ -3,8 +3,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2053.4] - 2026.03.01
+### Improve
+- Make auto-buy simulation aware of current bulk buy count (x1/x10/x100), including tier unlock projections.
+- Add purchase-units tracking and units/sec metric for better auto-buy speed visibility.
+- Add a quick Auto buy toggle and live speed indicator near the store title.
+### Fix
+- Clarify banking target descriptions: `42000`/`302400` are Frenzy (7x) scenarios (commonly enabled by `Get Lucky`), not direct `Get Lucky` formula changes.
+
+## [2053.3] - 2026.03.01
+### Improve
+- Add store quick controls and debugging helpers for auto-buy testing and runtime inspection.
+- Improve bulk-buy planning behavior and auto-buy observability in the TypeScript code path.
+
+## [2053.2] - 2026.02.28
+### Improve
+- Improve adaptive hybrid budgeting for simulation updates to reduce stale scoring and recalculation overhead.
+
+## [2053.1] - 2026.02.28
+### Change
+- Bump supported game/mod line to 2.053 / 2053.1.
+
+## [2048.15] - 2026.02.28
+### Add
+- Automate `ModVersion` bumping on each commit via pre-commit workflow.
+### Change
+- Refactor the mod into a TypeScript workspace and add one-command deployment workflow.
+- Add MCP-based debugging tooling and improve rank labeling utilities.
+
 ## [2048.14] - 2026.01.15
 - Change Mod Display name as "Cookie Payback Planner"
+
+## [2048.13] - 2024.09.30
+### Change
+- Change mod display name as "Cookie Profit Predictor".
 
 ## [2048.12] - 2024.03.22
 - Fix auto buy sell out buildings when sell mode is on

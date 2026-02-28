@@ -1,0 +1,12 @@
+---
+description: Ensure changelog entry exists before committing
+alwaysApply: true
+---
+
+# Changelog Before Commit
+
+Before creating any git commit, verify `CHANGELOG.md` has an entry that matches the change being committed.
+
+- If `CHANGELOG.md` is missing a relevant note, add one before committing.
+- If the commit is intentionally non-user-facing, explicitly confirm with the user that skipping changelog is acceptable.
+- During pre-commit checks, always review staged/unstaged changes and confirm changelog coverage.

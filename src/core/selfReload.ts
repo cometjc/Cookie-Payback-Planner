@@ -172,6 +172,17 @@ function loadScriptByTag(url: string) {
   document.head.appendChild(script);
 }
 
+function releaseRegisteredModSlot(this: CookiePaybackPlanner) {
+  const mods = (Game as any)?.mods as Record<string, any> | undefined;
+  if (!mods || typeof mods !== "object") {
+    return;
+  }
+  const current = mods[this.name];
+  if (current === this || current?.isDisposed) {
+    delete mods[this.name];
+  }
+}
+
 export function triggerSelfReload(this: CookiePaybackPlanner, _reason?: string) {
   if (this.isReloading) {
     return;
@@ -184,6 +195,7 @@ export function triggerSelfReload(this: CookiePaybackPlanner, _reason?: string) 
   };
 
   this.dispose({ keepReloadState: true });
+  releaseRegisteredModSlot.call(this);
 
   const scriptUrl = getMainScriptUrl.call(this);
   if (typeof Game.LoadMod === "function") {

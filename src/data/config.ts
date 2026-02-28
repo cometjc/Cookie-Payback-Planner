@@ -12,6 +12,27 @@ export interface Config {
   bankingSeconds: number | boolean;
   updateMS: number;
   enablePerfProfiler: boolean;
+  lookaheadTopK: number;
+  strategyAlgorithm: "beam" | "astar";
+  beamWidth: number;
+  beamDepth: number;
+  strategyAStarMaxExpand: number;
+  strategyAStarOpenLimit: number;
+  strategyAStarHeuristicWeight: number;
+  strategyAStarIncrementalBudgetMs: number;
+  strategyAStarMaxIncrementalStreak: number;
+  strategyBudgetMs: number;
+  strategyIncrementalBudgetMs: number;
+  strategySmoothing: number;
+  strategyRecomputeMs: number;
+  strategyFullRefreshMs: number;
+  strategyMaxIncrementalStreak: number;
+  strategyHorizonMinSec: number;
+  strategyHorizonMaxSec: number;
+  strategyHorizonScale: number;
+  strategyHorizonLongWeight: number;
+  maxHelperChains: number;
+  maxHelperBuysPerItem: number;
 }
 
 export const defaultConfig: Config = {
@@ -28,4 +49,25 @@ export const defaultConfig: Config = {
   bankingSeconds: true,
   updateMS: 1000,
   enablePerfProfiler: false,
+  lookaheadTopK: 9,
+  strategyAlgorithm: "beam",
+  beamWidth: 5,
+  beamDepth: 3,
+  strategyAStarMaxExpand: 140,
+  strategyAStarOpenLimit: 220,
+  strategyAStarHeuristicWeight: 0.35,
+  strategyAStarIncrementalBudgetMs: 1.6,
+  strategyAStarMaxIncrementalStreak: 4,
+  strategyBudgetMs: 5.2,
+  strategyIncrementalBudgetMs: 2.2,
+  strategySmoothing: 0.62,
+  strategyRecomputeMs: 320,
+  strategyFullRefreshMs: 1200,
+  strategyMaxIncrementalStreak: 6,
+  strategyHorizonMinSec: 30,
+  strategyHorizonMaxSec: 7200,
+  strategyHorizonScale: 12,
+  strategyHorizonLongWeight: 0.35,
+  maxHelperChains: 4,
+  maxHelperBuysPerItem: 100,
 };

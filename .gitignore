@@ -3,3 +3,4 @@
 /dist
 /.npm-cache
 .env
+.tmp-electron-upgrade/

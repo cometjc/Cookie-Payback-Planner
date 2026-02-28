@@ -2,11 +2,17 @@ import { createHash } from "node:crypto";
 import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { getCookieRoot, loadProjectEnv, toBestDealHelperDir } from "./env-runtime.mjs";
 
 const rootDir = process.cwd();
 const envPath = path.join(rootDir, ".env");
 const infoPath = path.join(rootDir, "info.txt");
-const filesToCopy = ["main.js", "info.txt", "thumbnail.png"];
+const builtMainRelativePath = path.join("dist", "main.js");
+const filesToCopy = [
+  { source: builtMainRelativePath, destination: "main.js" },
+  { source: "info.txt", destination: "info.txt" },
+  { source: "thumbnail.png", destination: "thumbnail.png" },
+];
 const manifestName = "deploy-manifest.json";
 
 function stripQuotes(value) {
@@ -59,11 +65,13 @@ function toManifestSignature(content) {
 }
 
 async function main() {
+  loadProjectEnv(rootDir);
   await ensureReadable(envPath, ".env");
   await ensureReadable(infoPath, "info.txt");
 
   const dotEnv = await readDotEnv(envPath);
-  const deployPathRaw = dotEnv.DEPLOY_MOD_PATH ?? process.env.DEPLOY_MOD_PATH;
+  const fallbackDeployPath = toBestDealHelperDir(getCookieRoot());
+  const deployPathRaw = dotEnv.DEPLOY_MOD_PATH ?? process.env.DEPLOY_MOD_PATH ?? fallbackDeployPath;
   const deployPath = normalizeAbsolutePath(deployPathRaw);
   if (!deployPath) {
     throw new Error("DEPLOY_MOD_PATH is not set in .env or process env");
@@ -78,14 +86,14 @@ async function main() {
 
   await mkdir(deployPath, { recursive: true });
 
-  for (const fileName of filesToCopy) {
-    const source = path.join(rootDir, fileName);
-    const destination = path.join(deployPath, fileName);
-    await ensureReadable(source, fileName);
+  for (const file of filesToCopy) {
+    const source = path.join(rootDir, file.source);
+    const destination = path.join(deployPath, file.destination);
+    await ensureReadable(source, file.source);
     await copyFile(source, destination);
   }
 
-  const mainJs = await readFile(path.join(rootDir, "main.js"), "utf8");
+  const mainJs = await readFile(path.join(rootDir, builtMainRelativePath), "utf8");
   const manifest = {
     modId,
     modVersion,

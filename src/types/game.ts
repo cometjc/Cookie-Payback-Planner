@@ -40,8 +40,11 @@ export interface Tier {
 }
 
 export interface Game {
+  mods?: Record<string, any>;
   customOptionsMenu: Array<() => void>;
   customStatsMenu: Array<() => void>;
+  registerHook?: (hook: string, callback: () => void) => void;
+  removeHook?: (hook: string, callback: () => void) => void;
   Upgrades: Upgrade[];
   UpgradesById: Upgrade[];
   UpgradesInStore: Upgrade[];
@@ -66,14 +69,36 @@ export interface Game {
   };
   Win: AnyFunction;
   buyMode: number;
+  buyBulk?: number | string;
+  resets?: number;
   cookies: number;
+  cookieClicks?: number;
   cookiesPs: number;
   cookiesPsRaw: number;
   cookiesPsRawHighest: number;
   globalCpsMult: number;
   storedCps: number;
   unbuffedCps: number;
+  computedMouseCps?: number;
+  buffs?: Record<string, Buff>;
+  fps?: number;
   clickStr: string;
+  Popup?: (text: string) => void;
+  Notify?: (title: string, desc?: string, icon?: [number, number], quick?: boolean) => void;
+}
+
+export interface Buff {
+  name?: string;
+  dname?: string;
+  type?: string;
+  source?: string;
+  time?: number;
+  maxTime?: number;
+  multCpS?: number;
+  multCps?: number;
+  multClick?: number;
+  multClicks?: number;
+  multMouse?: number;
 }
 
 export interface App {

@@ -10,7 +10,7 @@
 			},
 			"problemMatcher": [],
 			"label": "npm: build",
-			"detail": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=main.js"
+			"detail": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/main.js"
 		}
 	]
 }

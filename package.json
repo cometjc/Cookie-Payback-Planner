@@ -2,14 +2,19 @@
   "name": "cookie-payback-planner",
   "version": "1.0.0",
   "description": "✔️ **Achievements are NOT disabled** when using this mod.",
-  "main": "main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=main.js",
-    "build:watch": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=main.js --watch",
+    "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/main.js",
+    "build:watch": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/main.js --watch",
     "deploy": "npm run build && node scripts/deploy-mod.mjs",
     "inspect:auto": "node scripts/inspect-auto.mjs",
     "inspect:mcp": "node scripts/inspect-mcp.mjs",
     "inspect:probe": "node scripts/inspect-cookie-clicker.mjs",
+    "inspect:options": "node scripts/inspect-options-ui.mjs",
+    "inspect:auto-hz": "node scripts/inspect-auto-buy-hz.mjs",
+    "mcp:chrome:start": "node scripts/start-mcp-chrome.mjs",
+    "mcp:chrome:probe": "node scripts/probe-mcp-chrome.mjs",
+    "cookie:reload": "node scripts/reload-cookie-page.mjs",
     "typecheck": "tsc --noEmit",
     "lint:src": "oxlint src",
     "test": "vitest",
@@ -39,5 +44,8 @@
   },
   "dependencies": {
     "chroma-js": "^3.2.0"
+  },
+  "directories": {
+    "doc": "docs"
   }
 }

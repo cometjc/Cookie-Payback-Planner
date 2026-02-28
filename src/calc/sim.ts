@@ -2,32 +2,241 @@ import chroma from "chroma-js";
 import type { Building, SimulateStatus, Upgrade } from "../types/game";
 import type { CookiePaybackPlanner } from "../core/predictor";
 import { Game } from "../core/globals";
+import { getItemToken as getNormalizedItemToken, normalizeItemType } from "../strategy/selectors";
+
+function getItemToken(me: Building | Upgrade) {
+  return getNormalizedItemToken(me);
+}
 
 function getCookieBucket() {
   const cps = Math.max(1, Math.floor(Game.cookiesPs));
   return Math.floor(Game.cookies / cps);
 }
 
-function getBuffSignature() {
-  return `${Math.floor(Game.unbuffedCps)}:${Math.floor(Game.cookiesPsRaw)}:${Math.floor(Game.globalCpsMult * 1000)}`;
+function getBuffSignature(this: CookiePaybackPlanner) {
+  const buffSummary = getTimedBuffWindowsSummary.call(this);
+  return `${Math.floor(Game.unbuffedCps)}:${Math.floor(Game.cookiesPsRaw)}:${Math.floor(Game.globalCpsMult * 1000)}:${buffSummary}`;
+}
+
+const PASSIVE_MULT_KEYS = ["multCpS", "multCps"] as const;
+const CLICK_MULT_KEYS = ["multClick", "multClicks", "multMouse"] as const;
+
+type TimedCpsWindow = {
+  remainingSec: number;
+  passiveMult: number;
+  clickMult: number;
+};
+
+function getTimedBuffObservationKey(buffSlot: string, buff: any, passiveMult: number, clickMult: number) {
+  const name = String(buff?.name || buff?.dname || buff?.type || "buff");
+  return `${buffSlot}:${name}:${passiveMult.toFixed(6)}x${clickMult.toFixed(6)}`;
+}
+
+function latchTimedBuffEndAt(
+  this: CookiePaybackPlanner,
+  buffObservationKey: string,
+  observedRemainingSec: number,
+  nowMs: number
+): number {
+  const observedEndAt = nowMs + observedRemainingSec * 1000;
+  const existingEndAt = this.observedTimedBuffEndAt.get(buffObservationKey);
+  if (typeof existingEndAt !== "number" || !Number.isFinite(existingEndAt)) {
+    this.observedTimedBuffEndAt.set(buffObservationKey, observedEndAt);
+    return observedEndAt;
+  }
+  const trackedRemainingSec = Math.max(0, (existingEndAt - nowMs) / 1000);
+  // Buff refreshed or re-triggered; reset to the newly observed end point.
+  if (observedRemainingSec > trackedRemainingSec + 0.75) {
+    this.observedTimedBuffEndAt.set(buffObservationKey, observedEndAt);
+    return observedEndAt;
+  }
+  return existingEndAt;
+}
+
+function cleanupObservedTimedBuffEndAt(this: CookiePaybackPlanner, activeObservationKeys: Set<string>, nowMs: number) {
+  for (const [key, endAt] of this.observedTimedBuffEndAt) {
+    if (activeObservationKeys.has(key)) {
+      continue;
+    }
+    if (!Number.isFinite(endAt) || endAt <= nowMs + 1000) {
+      this.observedTimedBuffEndAt.delete(key);
+    }
+  }
+}
+
+function getCurrentCookiePerClick() {
+  const numericMouseCps = Number((Game as any).computedMouseCps);
+  if (Number.isFinite(numericMouseCps) && numericMouseCps > 0) {
+    return numericMouseCps;
+  }
+  const clickStr = String((Game as any).clickStr || "");
+  const parsed = Number(clickStr.replace(/[^0-9eE+.-]/g, ""));
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return 0;
+}
+
+function collectTimedBuffWindows(this: CookiePaybackPlanner, elapsedOffsetSec = 0): TimedCpsWindow[] {
+  const buffs = ((Game as any).buffs ?? {}) as Record<string, any>;
+  const fps = Number.isFinite(Game.fps) && (Game.fps as number) > 0 ? (Game.fps as number) : 30;
+  const nowMs = Date.now();
+  const activeObservationKeys = new Set<string>();
+  const windows: TimedCpsWindow[] = [];
+  for (const [buffSlot, buff] of Object.entries(buffs)) {
+    if (!buff || typeof buff !== "object") continue;
+    let passiveMult = 1;
+    let clickMult = 1;
+    for (const key of PASSIVE_MULT_KEYS) {
+      const value = Number((buff as any)[key]);
+      if (Number.isFinite(value) && value > 0) {
+        passiveMult *= value;
+      }
+    }
+    for (const key of CLICK_MULT_KEYS) {
+      const value = Number((buff as any)[key]);
+      if (Number.isFinite(value) && value > 0) {
+        clickMult *= value;
+      }
+    }
+    if (passiveMult === 1 && clickMult === 1) continue;
+    const rawRemaining = Number(buff.time);
+    if (!Number.isFinite(rawRemaining) || rawRemaining <= 0) continue;
+    const observedRemainingSec = rawRemaining / fps;
+    if (!Number.isFinite(observedRemainingSec) || observedRemainingSec <= 0) continue;
+    const observationKey = getTimedBuffObservationKey(buffSlot, buff, passiveMult, clickMult);
+    activeObservationKeys.add(observationKey);
+    const endAtMs = latchTimedBuffEndAt.call(this, observationKey, observedRemainingSec, nowMs);
+    const remainingSec = (endAtMs - nowMs) / 1000 - Math.max(0, elapsedOffsetSec);
+    if (!Number.isFinite(remainingSec) || remainingSec <= 0) continue;
+    windows.push({ remainingSec, passiveMult, clickMult });
+  }
+  cleanupObservedTimedBuffEndAt.call(this, activeObservationKeys, nowMs);
+  return windows;
+}
+
+function getTimedBuffWindowsSummary(this: CookiePaybackPlanner) {
+  collectTimedBuffWindows.call(this, 0);
+  const buffs = ((Game as any).buffs ?? {}) as Record<string, any>;
+  const normalized = Object.entries(buffs)
+    .map(([buffSlot, buff]) => {
+      if (!buff || typeof buff !== "object") return "";
+      const remain = Number(buff.time);
+      if (!Number.isFinite(remain) || remain <= 0) return "";
+      let passiveMult = 1;
+      let clickMult = 1;
+      for (const key of PASSIVE_MULT_KEYS) {
+        const value = Number((buff as any)[key]);
+        if (Number.isFinite(value) && value > 0) {
+          passiveMult *= value;
+        }
+      }
+      for (const key of CLICK_MULT_KEYS) {
+        const value = Number((buff as any)[key]);
+        if (Number.isFinite(value) && value > 0) {
+          clickMult *= value;
+        }
+      }
+      if (passiveMult === 1 && clickMult === 1) return "";
+      const key = getTimedBuffObservationKey(buffSlot, buff, passiveMult, clickMult);
+      const endAtMs = this.observedTimedBuffEndAt.get(key);
+      const endAtSec = Number.isFinite(endAtMs) ? Math.floor((endAtMs as number) / 1000) : 0;
+      return `${key}@${endAtSec}`;
+    })
+    .filter((value) => value)
+    .sort();
+  if (!normalized.length) return "0";
+  return normalized.join(",");
+}
+
+function estimateWaitWithTimedWindows(
+  remainingCookies: number,
+  basePassiveCps: number,
+  baseClickCps: number,
+  timedWindows: TimedCpsWindow[]
+) {
+  if (!Number.isFinite(remainingCookies) || remainingCookies <= 0) {
+    return 0;
+  }
+  const safeBasePassiveCps = Math.max(0, basePassiveCps);
+  const safeBaseClickCps = Math.max(0, baseClickCps);
+  const breakpoints = [...new Set(timedWindows.map((window) => window.remainingSec).filter((sec) => sec > 0))]
+    .sort((a, b) => a - b);
+  let elapsed = 0;
+  let remaining = remainingCookies;
+  for (const breakpoint of breakpoints) {
+    const duration = Math.max(0, breakpoint - elapsed);
+    if (duration <= 0) {
+      elapsed = breakpoint;
+      continue;
+    }
+    let passiveMult = 1;
+    let clickMult = 1;
+    for (const window of timedWindows) {
+      if (window.remainingSec > elapsed) {
+        passiveMult *= window.passiveMult;
+        clickMult *= window.clickMult;
+      }
+    }
+    const segmentCps = safeBasePassiveCps * passiveMult + safeBaseClickCps * passiveMult * clickMult;
+    if (segmentCps > 0) {
+      const produced = segmentCps * duration;
+      if (produced >= remaining) {
+        return elapsed + remaining / segmentCps;
+      }
+      remaining -= produced;
+    }
+    elapsed = breakpoint;
+  }
+  const steadyCps = safeBasePassiveCps + safeBaseClickCps;
+  if (steadyCps <= 0) {
+    return Infinity;
+  }
+  return elapsed + remaining / steadyCps;
+}
+
+export function sampleSmoothedClickCps(this: CookiePaybackPlanner) {
+  const now = Date.now();
+  const cookieClicks = Number((Game as any).cookieClicks);
+  if (!Number.isFinite(cookieClicks)) {
+    return this.smoothedClickCps;
+  }
+  if (this.lastClickSampleAt <= 0) {
+    this.lastClickSampleAt = now;
+    this.lastCookieClicks = cookieClicks;
+    return this.smoothedClickCps;
+  }
+  const clickDelta = Math.max(0, cookieClicks - this.lastCookieClicks);
+  if (clickDelta > 0) {
+    const cookiePerClick = getCurrentCookiePerClick();
+    const clickedCookies = Math.max(0, clickDelta * cookiePerClick);
+    this.manualClickRateWindow.add(clickedCookies, now);
+  }
+  this.smoothedClickCps = this.manualClickRateWindow.ratePerSec(now);
+  this.lastClickCpsRaw = this.smoothedClickCps;
+  this.lastClickSampleAt = now;
+  this.lastCookieClicks = cookieClicks;
+  return this.smoothedClickCps;
 }
 
 function getSimulationKey(this: CookiePaybackPlanner, me: Building | Upgrade) {
   const bank = this.getBankCookies();
   const price = Math.floor(me.getPrice());
+  const itemType = normalizeItemType(me);
   const common = [
     me.id,
-    me.type,
+    itemType,
     me.amount,
     me.bought,
     price,
     Math.floor(bank),
     getCookieBucket(),
-    getBuffSignature(),
+    getBuffSignature.call(this),
     this.config.sortGrandmapocalypse ? 1 : 0,
     this.config.sortWizardTower ? 1 : 0,
+    this.getCurrentBuyCount(),
   ];
-  if (me.type === "building") {
+  if (itemType === "building") {
     const building = me as Building;
     const tierUnlock = Object.values(building.tieredUpgrades || {})
       .map((u) => `${u.id}:${u.bought}`)
@@ -37,8 +246,29 @@ function getSimulationKey(this: CookiePaybackPlanner, me: Building | Upgrade) {
   return common.join("|");
 }
 
-function getItemToken(me: Building | Upgrade) {
-  return `${me.type}:${me.id}`;
+export function estimateWaitSeconds(
+  this: CookiePaybackPlanner,
+  price: number,
+  cookies: number,
+  cps: number,
+  elapsedOffsetSec = 0
+) {
+  const bank = this.getBankCookies();
+  const remaining = price + bank - cookies;
+  if (remaining <= 0) {
+    return 0;
+  }
+  const timedWindows = collectTimedBuffWindows.call(this, elapsedOffsetSec);
+  let passiveMultNow = 1;
+  let clickMultNow = 1;
+  for (const window of timedWindows) {
+    passiveMultNow *= window.passiveMult;
+    clickMultNow *= window.clickMult;
+  }
+  const currentClickCps = Math.max(0, Number.isFinite(this.smoothedClickCps) ? this.smoothedClickCps : 0);
+  const basePassiveCps = Math.max(0, cps) / Math.max(1e-6, passiveMultNow);
+  const baseClickCps = currentClickCps / Math.max(1e-6, passiveMultNow * clickMultNow);
+  return estimateWaitWithTimedWindows(remaining, basePassiveCps, baseClickCps, timedWindows);
 }
 
 function percentile(values: number[], p: number) {
@@ -111,11 +341,11 @@ export function calcCookieTimesCost(
     sim.paidCookies += price;
     sim.currentCookies -= price;
   } else if (sim.currentCookies < price + bank && sim.currentCookies >= bank) {
-    sim.waitTime += (price + bank - sim.currentCookies) / oldCps;
+    sim.waitTime += this.estimateWaitSeconds(price, sim.currentCookies, oldCps, sim.waitTime);
     sim.paidCookies += sim.currentCookies - bank;
     sim.currentCookies = bank;
   } else {
-    sim.waitTime += (price + bank - sim.currentCookies) / oldCps;
+    sim.waitTime += this.estimateWaitSeconds(price, sim.currentCookies, oldCps, sim.waitTime);
     sim.currentCookies = bank;
   }
 }
@@ -222,8 +452,10 @@ export function updateBestCpsAcceleration(this: CookiePaybackPlanner, me: Buildi
     me.BestCpsAcceleration = (Game.unbuffedCps - oldCps) / me.BestWaitTime;
   } else {
     const building = me as Building;
+    const buyCount = this.getCurrentBuyCount();
     let nextTierUpgrade = null as Upgrade | null;
     let amountToUnlockTier = 0;
+    let nextTierUnlocked = false;
     const lockedTiers = Object.values(building.tieredUpgrades || {}).filter(
       (e) => Game.Tiers[e.tier].unlock !== -1 && e.buildingTie.bought < Game.Tiers[e.tier].unlock
     );
@@ -234,14 +466,19 @@ export function updateBestCpsAcceleration(this: CookiePaybackPlanner, me: Buildi
       }
     }
 
-    for (let buy = 0; buy < 50; buy++) {
-      this.calcCookieTimesCost(building.getPrice(), Game.unbuffedCps, sim);
-      building.amount++;
-      building.bought++;
-      Game.CalculateGains();
-      if (nextTierUpgrade && building.amount == amountToUnlockTier) {
+    const maxUnitsToExplore = 50;
+    const maxSteps = Math.max(1, Math.ceil(maxUnitsToExplore / Math.max(1, buyCount)));
+    for (let step = 0; step < maxSteps; step++) {
+      for (let i = 0; i < buyCount; i++) {
+        this.calcCookieTimesCost(building.getPrice(), Game.unbuffedCps, sim);
+        building.amount++;
+        building.bought++;
+        Game.CalculateGains();
+      }
+      if (nextTierUpgrade && !nextTierUnlocked && building.amount >= amountToUnlockTier) {
         this.calcCookieTimesCost(nextTierUpgrade.getPrice(), Game.unbuffedCps, sim);
         nextTierUpgrade.bought = 1;
+        nextTierUnlocked = true;
         Game.CalculateGains();
       }
       const waitTime = sim.waitTime + sim.paidCookies / Game.unbuffedCps;
@@ -271,11 +508,17 @@ export function updateBestCpsAcceleration(this: CookiePaybackPlanner, me: Buildi
 export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Building | Upgrade>) {
   all.forEach((e) => (e.BestHelperOrder = 0));
   all = all.filter((e) => !this.isIgnored(e));
+  if (!all.length) {
+    return;
+  }
 
   let helperOrder = 0;
   let target = all[0];
+  const maxChains = Math.max(1, Math.floor(this.config.maxHelperChains));
+  let chainCount = 0;
 
-  while (target.getPrice() > Game.cookies) {
+  while (target.getPrice() > Game.cookies && chainCount < maxChains) {
+    chainCount++;
     target.timeToTargetCookie = (target.getPrice() - Game.cookies) / Game.unbuffedCps;
     const helpers: Array<Building | Upgrade> = [];
     for (const e of all) {
@@ -290,7 +533,9 @@ export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Buildin
       const sim = this.initSimData();
 
       me.timeToTargetCookie = Infinity;
-      for (let buy = 1; buy < Infinity; buy++) {
+      const maxHelperBuys = Math.max(1, Math.floor(this.config.maxHelperBuysPerItem));
+      for (let buy = 1; buy <= maxHelperBuys; buy++) {
+        this.helperExpandedNodes++;
         this.calcCookieTimesCost(me.getPrice(), Game.unbuffedCps, sim);
         me.amount++;
         me.bought++;
@@ -305,6 +550,9 @@ export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Buildin
         }
         if (me.type == "upgrade") break;
       }
+      if (me.timeToTargetCookie === Infinity) {
+        this.helperAbortedByBudget++;
+      }
 
       this.leaveSandBox(save);
     }
@@ -317,14 +565,20 @@ export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Buildin
   }
 }
 
-export function updateColorRender(this: CookiePaybackPlanner, all: Array<Building | Upgrade>) {
-  const cpsAccList = [...new Set(all.map((e) => e.BestCpsAcceleration))].sort((a, b) => b - a);
+export function updateColorRender(
+  this: CookiePaybackPlanner,
+  all: Array<Building | Upgrade>,
+  scoreByItem?: Map<string, number>
+) {
+  const scoreList = [
+    ...new Set(all.map((e) => scoreByItem?.get(getItemToken(e)) ?? e.BestCpsAcceleration).filter((e) => Number.isFinite(e))),
+  ].sort((a, b) => b - a);
   const colorGroups = [
-    [this.config.colorLast, cpsAccList[cpsAccList.length - 1]],
-    [this.config.color15, cpsAccList[15]],
-    [this.config.color7, cpsAccList[7]],
-    [this.config.color1, cpsAccList[1]],
-    [this.config.color0, cpsAccList[0]],
+    [this.config.colorLast, scoreList[scoreList.length - 1]],
+    [this.config.color15, scoreList[15]],
+    [this.config.color7, scoreList[7]],
+    [this.config.color1, scoreList[1]],
+    [this.config.color0, scoreList[0]],
   ].filter((e) => e[1] !== undefined);
   this.colorRender = chroma
     .scale(colorGroups.map((e) => e[0] as string))
@@ -333,11 +587,8 @@ export function updateColorRender(this: CookiePaybackPlanner, all: Array<Buildin
 }
 
 export function calcWaitingTime(this: CookiePaybackPlanner, me: Building | Upgrade) {
-  const bank = this.getBankCookies();
-  let waitCookie = me.getPrice() + bank - Game.cookies;
-  if (waitCookie < 0) return "";
-
-  const seconds = waitCookie / Game.cookiesPs;
+  const seconds = this.estimateWaitSeconds(me.getPrice(), Game.cookies, Game.unbuffedCps);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
   const a = [
     Math.floor(seconds / 60 / 60 / 24 / 30 / 12) + "y",
     Math.floor(seconds / 60 / 60 / 24 / 30 % 12) + "m",

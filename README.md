@@ -8,13 +8,13 @@
 ---
 
 ## 🧩 拆分說明
-`main.js` 已拆分為多個 TypeScript 模組，入口為 `src/index.ts`，透過 esbuild 打包輸出根目錄 `main.js`。
+`main.js` 已拆分為多個 TypeScript 模組，入口為 `src/index.ts`，透過 esbuild 打包輸出 `dist/main.js`。
 
 ## 🚀 開發部署
 - 在 `.env` 設定 `DEPLOY_MOD_PATH` 為你的 Cookie Clicker workshop mod 目錄。
 - 執行 `npm run deploy` 會自動：
-  - build 最新 `main.js`
-  - 複製 `main.js` / `info.txt` / `thumbnail.png` 到 `DEPLOY_MOD_PATH`
+  - build 最新 `dist/main.js`
+  - 複製 `dist/main.js`（部署時命名為 `main.js`）與 `info.txt` / `thumbnail.png` 到 `DEPLOY_MOD_PATH`
   - 產生 `deploy-manifest.json`（含版本與 build hash）
 - 遊戲內 mod 會輪詢 `deploy-manifest.json`，偵測到新版後只重載自身，並接續原本 tick 節奏，避免 timer 疊加。
 

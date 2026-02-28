@@ -1,14 +1,16 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import process from "node:process";
+import { getCookieRoot, loadProjectEnv, toCookieExe } from "./env-runtime.mjs";
 
 const defaultPort = 9222;
 const defaultOrigin = `http://127.0.0.1:${defaultPort}`;
-const defaultExe = "D:\\SteamLibrary\\steamapps\\common\\Cookie Clicker\\Cookie Clicker.exe";
 const defaultSteamExe = "C:\\Program Files (x86)\\Steam\\steam.exe";
 const defaultSteamAppId = "1454400";
 
 export function getInspectConfig() {
+  loadProjectEnv();
+  const defaultExe = toCookieExe(getCookieRoot());
   const debugPort = Number.parseInt(process.env.COOKIE_REMOTE_DEBUG_PORT || `${defaultPort}`, 10);
   const debugOrigin = process.env.COOKIE_REMOTE_DEBUG_URL || `http://127.0.0.1:${debugPort}`;
   const cookieExePath = process.env.COOKIE_CLICKER_EXE || defaultExe;

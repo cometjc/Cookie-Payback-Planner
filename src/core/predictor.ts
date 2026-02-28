@@ -1,7 +1,21 @@
 import type { Config } from "../data/config";
-import type { AnyFunction, Upgrade } from "../types/game";
+import type { AnyFunction, Building, Upgrade } from "../types/game";
 import { defaultConfig } from "../data/config";
-import { register, init, load, save, checkUpdateUI, tick, dispose, scheduleNextTick } from "./lifecycle";
+import type { SearchPath } from "../search/algorithms";
+import {
+  register,
+  init,
+  load,
+  save,
+  checkUpdateUI,
+  tick,
+  dispose,
+  scheduleNextTick,
+  markConfigDirty,
+  getRecentPurchaseUnitsPerSec,
+  recordPurchaseUnits,
+  getCurrentBuyCount,
+} from "./lifecycle";
 import {
   calcCookieTimesCost,
   calcWaitingTime,
@@ -14,17 +28,22 @@ import {
   updateBestCpsAcceleration,
   updateColorRender,
   updateHelperOrder,
+  estimateWaitSeconds,
+  sampleSmoothedClickCps,
 } from "../calc/sim";
 import {
   arrayCommonInTheSameOrder,
   colorSpanByValue,
   colorSpanInRainbow,
   insertAfter,
+  reapplyLastKnownNotationFromCache,
+  reapplyLastKnownStoreOrder,
   reorderBuildings,
   reorderUpgrades,
   updateNotation,
   updateUI,
 } from "../ui/render";
+import { getStableStrategyScore } from "../strategy/engine";
 import {
   addOptionsMenu,
   autoBuyDiv,
@@ -42,8 +61,51 @@ import {
   stopSelfReloadWatcher,
   triggerSelfReload,
 } from "./selfReload";
+import { RATE_SMOOTHING_WINDOW_MS, SlidingRateWindow } from "./rateWindow";
 
 export class CookiePaybackPlanner {
+  strategyState: {
+    scoreByItem: Map<string, number>;
+    lastRefreshAt: number;
+    lastFullRefreshAt: number;
+    stateSignature: string;
+    frontier: SearchPath[];
+    currentHorizonShortSec: number;
+    currentHorizonLongSec: number;
+    expandedNodes: number;
+    openPeak: number;
+    timeoutCount: number;
+    budgetHitCount: number;
+    astarBudgetHitCount: number;
+    fallbackCount: number;
+    astarFallbackCount: number;
+    refreshDurationsMs: number[];
+    runs: number;
+    fullRuns: number;
+    incrementalRuns: number;
+    incrementalStreak: number;
+  } = {
+    scoreByItem: new Map<string, number>(),
+    lastRefreshAt: 0,
+    lastFullRefreshAt: 0,
+    stateSignature: "",
+    frontier: [],
+    currentHorizonShortSec: 60,
+    currentHorizonLongSec: 120,
+    expandedNodes: 0,
+    openPeak: 0,
+    timeoutCount: 0,
+    budgetHitCount: 0,
+    astarBudgetHitCount: 0,
+    fallbackCount: 0,
+    astarFallbackCount: 0,
+    refreshDurationsMs: [],
+    runs: 0,
+    fullRuns: 0,
+    incrementalRuns: 0,
+    incrementalStreak: 0,
+  };
+
   displayname = "Cookie Payback Planner";
   name = "Best Deal Helper";
   modId = "BestDealHelper";
@@ -74,6 +136,8 @@ export class CookiePaybackPlanner {
   default_config: Config = { ...defaultConfig };
   config: Config = { ...defaultConfig };
   last_config: Config = { ...defaultConfig };
+  configRevision = 0;
+  lastHandledConfigRevision = 0;
   colorRender: (value: number) => string = () => this.config.color0;
   uiDirty = true;
   lastUiRefreshAt = 0;
@@ -97,6 +161,73 @@ export class CookiePaybackPlanner {
   profilerDurationsMs: number[] = [];
   profilerLastAvgMs = 0;
   profilerLastP95Ms = 0;
+  metricsWindowStartedAt = 0;
+  refreshAttemptCount = 0;
+  refreshSuccessCount = 0;
+  refreshDurationsMs: number[] = [];
+  refreshSkipCount = 0;
+  helperExpandedNodes = 0;
+  helperAbortedByBudget = 0;
+  strategyExpandedNodes = 0;
+  strategyOpenPeak = 0;
+  strategyTimeoutCount = 0;
+  strategyBudgetHitCount = 0;
+  strategyAStarBudgetHitCount = 0;
+  strategyFallbackCount = 0;
+  strategyAStarFallbackCount = 0;
+  strategyRefreshDurationsMs: number[] = [];
+  strategyRuns = 0;
+  strategyFullRuns = 0;
+  strategyIncrementalRuns = 0;
+  strategyIncrementalStreak = 0;
+  lastMetricsLogAt = 0;
+  strategyScoreByItem = new Map<string, number>();
+  lastStrategyRefreshAt = 0;
+  lastFullStrategyRefreshAt = 0;
+  lastStrategyStateSignature = "";
+  lastStrategyFrontier: SearchPath[] = [];
+  lastBeamFrontier: SearchPath[] = [];
+  strategyCurrentHorizonShortSec = 60;
+  strategyCurrentHorizonLongSec = 120;
+  lastObservedBuyBulk = 1;
+  lastObservedBuffSignature = "";
+  lastObservedAscendCount = 0;
+  lastObservedBoughtUpgradeCount = 0;
+  lastObservedBuildingAmount = 0;
+  autoBuyLogicHook: (() => void) | null = null;
+  autoBuyLogicTickCounter = 0;
+  autoBuyTicksPerAttempt = 10;
+  autoBuyCandidateMaxAgeMs = 700;
+  autoBuyFastTrackUiMs = 600;
+  autoBuyFastTrackUntil = 0;
+  autoBuyAwaitingFreshBestDeal = false;
+  autoBuyBestCandidate: Building | Upgrade | null = null;
+  autoBuyBestCandidateToken = "";
+  autoBuyBestCandidateAt = 0;
+  autoBuyTopCandidates: Array<{ item: Building | Upgrade; token: string; score: number; waitSec: number }> = [];
+  autoBuyMetricsWindowStartedAt = 0;
+  autoBuyAttemptCount = 0;
+  autoBuyBuyCount = 0;
+  autoBuySkipNotReadyCount = 0;
+  autoBuySkipUnavailableCount = 0;
+  autoBuySkipStaleCandidateCount = 0;
+  autoBuySkipModeCount = 0;
+  autoBuyLastBoughtAt = 0;
+  autoBuyTotalIntervalMs = 0;
+  rateSmoothingWindowMs = RATE_SMOOTHING_WINDOW_MS;
+  clickRateSmoothingWindowMs = 30000;
+  purchaseRateWindow = new SlidingRateWindow(this.rateSmoothingWindowMs);
+  autoBuyRateWindow = new SlidingRateWindow(this.rateSmoothingWindowMs);
+  manualClickRateWindow = new SlidingRateWindow(this.clickRateSmoothingWindowMs);
+  smoothedClickCps = 0;
+  lastClickCpsRaw = 0;
+  lastClickSampleAt = 0;
+  lastCookieClicks = 0;
+  observedTimedBuffEndAt = new Map<string, number>();
+  strategyClickBucket = 0;
+  strategyClickBucketLastUpdatedAt = 0;
+  lastSortedUpgradeTokens: string[] = [];
+  lastSortedBuildingTokens: string[] = [];
 
   register = register;
   init = init;
@@ -105,6 +236,10 @@ export class CookiePaybackPlanner {
   checkUpdateUI = checkUpdateUI;
   tick = tick;
   scheduleNextTick = scheduleNextTick;
+  markConfigDirty = markConfigDirty;
+  getRecentPurchaseUnitsPerSec = getRecentPurchaseUnitsPerSec;
+  recordPurchaseUnits = recordPurchaseUnits;
+  getCurrentBuyCount = getCurrentBuyCount;
   dispose = dispose;
 
   insertAfter = insertAfter;
@@ -121,8 +256,13 @@ export class CookiePaybackPlanner {
   colorSpanByValue = colorSpanByValue;
   updateColorRender = updateColorRender;
   calcWaitingTime = calcWaitingTime;
+  estimateWaitSeconds = estimateWaitSeconds;
+  sampleSmoothedClickCps = sampleSmoothedClickCps;
   updateNotation = updateNotation;
+  getStableStrategyScore = getStableStrategyScore;
   arrayCommonInTheSameOrder = arrayCommonInTheSameOrder;
+  reapplyLastKnownStoreOrder = reapplyLastKnownStoreOrder;
+  reapplyLastKnownNotationFromCache = reapplyLastKnownNotationFromCache;
   reorderUpgrades = reorderUpgrades;
   reorderBuildings = reorderBuildings;
   updateUI = updateUI;
