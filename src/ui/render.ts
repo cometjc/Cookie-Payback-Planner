@@ -29,6 +29,7 @@ export function colorSpanByValue(this: CookiePaybackPlanner, span: HTMLSpanEleme
 type RatioMetric = {
   logRatio: number;
   rankPercentile: number;
+  rankOrder: number;
   normalizedPercent: number;
 };
 
@@ -40,17 +41,17 @@ function ratingEmoji(rankPercentile: number, normalizedPercent: number) {
   return "✨";
 }
 
-function formatOrdinalPercentile(value: number) {
-  const bounded = Math.max(0, Math.min(100, Math.round(value)));
-  const mod100 = bounded % 100;
+function formatOrdinalRank(value: number) {
+  const rounded = Math.max(1, Math.round(value));
+  const mod100 = rounded % 100;
   if (mod100 >= 11 && mod100 <= 13) {
-    return `${bounded}th`;
+    return `${rounded}th`;
   }
-  const mod10 = bounded % 10;
-  if (mod10 === 1) return `${bounded}st`;
-  if (mod10 === 2) return `${bounded}nd`;
-  if (mod10 === 3) return `${bounded}rd`;
-  return `${bounded}th`;
+  const mod10 = rounded % 10;
+  if (mod10 === 1) return `${rounded}st`;
+  if (mod10 === 2) return `${rounded}nd`;
+  if (mod10 === 3) return `${rounded}rd`;
+  return `${rounded}th`;
 }
 
 function calcMedian(values: number[]) {
@@ -87,9 +88,7 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
     } else {
       const labelParts: string[] = [];
       if (metric) {
-        labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalPercentile(
-          metric.rankPercentile,
-        )}`);
+        labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
         labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
       }
       span.textContent = labelParts.join(" ");
@@ -123,9 +122,7 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
     } else {
       const labelParts: string[] = [];
       if (metric) {
-        labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalPercentile(
-          metric.rankPercentile,
-        )}`);
+        labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
         labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
       }
       span.textContent = labelParts.join(" · ");
@@ -243,11 +240,13 @@ export function updateUI(this: CookiePaybackPlanner) {
   const sortedEntries = [...ratioEntries].sort((a, b) => b.logRatio - a.logRatio);
   const ratioMetrics = new Map<Building | Upgrade, RatioMetric>();
   sortedEntries.forEach((entry, index) => {
+    const rankOrder = index + 1;
     const rankPercentile =
       sortedEntries.length === 1 ? 100 : ((sortedEntries.length - index) / sortedEntries.length) * 100;
     ratioMetrics.set(entry.me, {
       logRatio: entry.logRatio,
       rankPercentile,
+      rankOrder,
       normalizedPercent: range > 0 ? ((entry.logRatio - minLog) / range) * 100 : 100,
     });
   });

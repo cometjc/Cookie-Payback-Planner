@@ -4309,17 +4309,17 @@
     if (normalizedPercent >= 70) return "\u{1F680}";
     return "\u2728";
   }
-  function formatOrdinalPercentile(value) {
-    const bounded = Math.max(0, Math.min(100, Math.round(value)));
-    const mod100 = bounded % 100;
+  function formatOrdinalRank(value) {
+    const rounded = Math.max(1, Math.round(value));
+    const mod100 = rounded % 100;
     if (mod100 >= 11 && mod100 <= 13) {
-      return `${bounded}th`;
+      return `${rounded}th`;
     }
-    const mod10 = bounded % 10;
-    if (mod10 === 1) return `${bounded}st`;
-    if (mod10 === 2) return `${bounded}nd`;
-    if (mod10 === 3) return `${bounded}rd`;
-    return `${bounded}th`;
+    const mod10 = rounded % 10;
+    if (mod10 === 1) return `${rounded}st`;
+    if (mod10 === 2) return `${rounded}nd`;
+    if (mod10 === 3) return `${rounded}rd`;
+    return `${rounded}th`;
   }
   function calcMedian(values) {
     const sorted = [...values].sort((a, b) => a - b);
@@ -4353,9 +4353,7 @@
       } else {
         const labelParts = [];
         if (metric) {
-          labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalPercentile(
-            metric.rankPercentile
-          )}`);
+          labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
           labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
         }
         span.textContent = labelParts.join(" ");
@@ -4388,9 +4386,7 @@
       } else {
         const labelParts = [];
         if (metric) {
-          labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalPercentile(
-            metric.rankPercentile
-          )}`);
+          labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
           labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
         }
         span.textContent = labelParts.join(" \xB7 ");
@@ -4487,10 +4483,12 @@
     const sortedEntries = [...ratioEntries].sort((a, b) => b.logRatio - a.logRatio);
     const ratioMetrics = /* @__PURE__ */ new Map();
     sortedEntries.forEach((entry, index) => {
+      const rankOrder = index + 1;
       const rankPercentile = sortedEntries.length === 1 ? 100 : (sortedEntries.length - index) / sortedEntries.length * 100;
       ratioMetrics.set(entry.me, {
         logRatio: entry.logRatio,
         rankPercentile,
+        rankOrder,
         normalizedPercent: range > 0 ? (entry.logRatio - minLog) / range * 100 : 100
       });
     });
@@ -4760,14 +4758,62 @@
     "src/index.ts"() {
       init_predictor();
       init_globals();
+      var cookieAssistantName = "Cookie Assistant";
+      var confirmBypassNeedles = [
+        "Loading a different version may cause errors.",
+        `Do you still want to load ${cookieAssistantName}?`
+      ];
+      function shouldBypassCookieAssistantConfirm(message) {
+        const text = String(message ?? "");
+        return confirmBypassNeedles.every((needle) => text.includes(needle));
+      }
+      function installConfirmBypass() {
+        const win = window;
+        if (!win.__cppConfirmBypassInstalled) {
+          win.__cppOriginalConfirm = win.__cppOriginalConfirm || win.confirm.bind(win);
+          win.confirm = ((message) => {
+            if (shouldBypassCookieAssistantConfirm(message)) {
+              return true;
+            }
+            return win.__cppOriginalConfirm(message);
+          });
+          win.__cppConfirmBypassInstalled = true;
+        }
+        const ccse = getCCSE();
+        if (!ccse || typeof ccse.ConfirmLoad !== "function") {
+          return;
+        }
+        const wrapped = ccse.ConfirmLoad;
+        if (wrapped.__cppWrapped) {
+          return;
+        }
+        const originalConfirmLoad = wrapped;
+        const patchedConfirmLoad = ((modName, modVersion, versionText) => {
+          if (modName === cookieAssistantName) {
+            return true;
+          }
+          return originalConfirmLoad(modName, modVersion, versionText);
+        });
+        patchedConfirmLoad.__cppWrapped = true;
+        ccse.ConfirmLoad = patchedConfirmLoad;
+      }
+      installConfirmBypass();
+      var bypassRetryTimer = setInterval(() => {
+        installConfirmBypass();
+      }, 1e3);
+      setTimeout(() => clearInterval(bypassRetryTimer), 3e4);
       var cookieProfitPredictor = new CookiePaybackPlanner();
       if (!cookieProfitPredictor.isLoaded) {
         const ccse = getCCSE();
         if (ccse && ccse.isLoaded) {
+          installConfirmBypass();
           cookieProfitPredictor.register();
         } else {
           const ensured = ensureCCSE();
-          ensured.postLoadHooks?.push(() => cookieProfitPredictor.register());
+          ensured.postLoadHooks?.push(() => {
+            installConfirmBypass();
+            cookieProfitPredictor.register();
+          });
         }
       }
     }

@@ -18,6 +18,18 @@
   - 產生 `deploy-manifest.json`（含版本與 build hash）
 - 遊戲內 mod 會輪詢 `deploy-manifest.json`，偵測到新版後只重載自身，並接續原本 tick 節奏，避免 timer 疊加。
 
+## 🧠 Cursor MCP 即時偵錯
+- 專案已內建 `.cursor/mcp.json`，可透過 `npx` 啟動最新版 `chrome-devtools-mcp`。
+- 建議先執行 `npm run inspect:mcp`（單一入口：啟動遊戲、附加 CDP、輸出 MCP session metadata）。
+- 然後在 Cursor 直接用自然語言要求代理：
+  - 啟動/附加目前 target
+  - 執行 console/network/performance tracing
+  - 回傳分析結果與修正建議
+- 快速故障排除摘要：
+  - 若連不到 `9222`，先重跑 `npm run inspect:mcp`
+  - 若找不到 target，切回遊戲主畫面後執行 `npm run inspect:probe`
+- 詳細流程、提示詞模板與端到端驗收請看 `docs/mcp-realtime-debug.md`。
+
 ## 📈 回本效率指標
 查看任何建築或升級多快能回收你的 CPS 投資 ⏱️。
 
