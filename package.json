@@ -1,0 +1,38 @@
+{
+  "name": "cookie-payback-planner",
+  "version": "1.0.0",
+  "description": "✔️ **Achievements are NOT disabled** when using this mod.",
+  "main": "main.js",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=main.js",
+    "build:watch": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=main.js --watch",
+    "deploy": "npm run build && node scripts/deploy-mod.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint:src": "oxlint src",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cometjc/Cookie-Payback-Planner.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/cometjc/Cookie-Payback-Planner/issues"
+  },
+  "homepage": "https://github.com/cometjc/Cookie-Payback-Planner#readme",
+  "devDependencies": {
+    "@esbuild/win32-x64": "^0.27.2",
+    "@types/node": "^25.0.8",
+    "esbuild": "^0.27.2",
+    "oxlint": "^1.39.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.17"
+  },
+  "dependencies": {
+    "chroma-js": "^3.2.0"
+  }
+}

@@ -1,0 +1,10 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "plugins": ["typescript"],
+    "extends": ["recommended"],
+    "env": {
+      "browser": true,
+      "node": true
+    }
+  }
+  

@@ -1,11 +1,11 @@
 {
- "Name": "Cookie Profit Predictor",
+ "Name": "Cookie Payback Planner",
  "ID": "BestDealHelper",
  "Author": "Jethro Yu",
  "Description": "Just like Laplace's demon, but instead of predicting the universe, it’s all about cookies!",
- "ModVersion": 2048.13,
+ "ModVersion": 2048.14,
  "GameVersion": 2.048,
- "Date": "09/30/2024",
+ "Date": "01/15/2026",
  "Dependencies": [
   "CCSE"
  ],
