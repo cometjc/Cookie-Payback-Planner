@@ -1,0 +1,1 @@
+yarn lint:src && yarn test:run --passWithNoTests && node scripts/bump-mod-version.mjs && git add info.txt
