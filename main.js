@@ -25,7 +25,8 @@
         colorLast: "#de4dff",
         isBanking: true,
         bankingSeconds: true,
-        updateMS: 1e3
+        updateMS: 1e3,
+        enablePerfProfiler: false
       };
     }
   });
@@ -255,34 +256,65 @@
     this.originalRebuildUpgrades = Game.RebuildUpgrades;
     Game.RebuildUpgrades = () => {
       this.originalRebuildUpgrades?.();
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
+      for (const upgrade of Game.UpgradesInStore) {
+        this.highPriorityIds.add(`${upgrade.type}:${upgrade.id}`);
+      }
       this.checkUpdateUI();
     };
     this.originalRefreshStore = Game.RefreshStore;
     Game.RefreshStore = () => {
       this.originalRefreshStore?.();
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
+      for (const building of Game.ObjectsById) {
+        if (!building.l.classList.contains("toggledOff")) {
+          this.highPriorityIds.add(`${building.type}:${building.id}`);
+        }
+      }
+      for (const upgrade of Game.UpgradesInStore) {
+        this.highPriorityIds.add(`${upgrade.type}:${upgrade.id}`);
+      }
       this.checkUpdateUI();
     };
     this.originalClickProduct = Game.ClickProduct;
     Game.ClickProduct = (what) => {
       if (!Game.ObjectsById[what].waitingTime || Game.buyMode == -1) {
         Game.ObjectsById[what].buy();
+        this.uiDirty = true;
+        this.pendingSimRecalc = true;
+        const item = Game.ObjectsById[what];
+        this.highPriorityIds.add(`${item.type}:${item.id}`);
       }
     };
     this.originalUpgradeClick = Game.Upgrade.prototype.click;
     this.originalUpgradeClick2 = Game.Upgrade.prototype.click2 ?? null;
     Game.Upgrade.prototype.click2 = this.originalUpgradeClick;
+    const planner = this;
     Game.Upgrade.prototype.click = function(e) {
       const upgrade = this;
       if (upgrade.waitingTime && upgrade.BestCpsAcceleration) {
         return;
       }
-      return upgrade.click2(e);
+      const result = upgrade.click2(e);
+      planner.uiDirty = true;
+      planner.pendingSimRecalc = true;
+      planner.highPriorityIds.add(`${upgrade.type}:${upgrade.id}`);
+      return result;
     };
     this.hooksInstalled = true;
     this.config = { ...this.default_config };
     this.last_config = { ...this.default_config };
+    this.simCache.clear();
+    this.notationCache.clear();
+    this.lastComputedAtByItem.clear();
+    this.highPriorityIds.clear();
     this.isLoaded = true;
     this.isReloading = false;
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
+    this.lastUiRefreshAt = 0;
     const resumeDelay = consumeReloadTickDelay();
     this.startSelfReloadWatcher();
     this.scheduleNextTick(resumeDelay ?? this.config.updateMS / 10);
@@ -302,12 +334,15 @@
   function checkUpdateUI() {
     if (this.last_cps !== Game.cookiesPs) {
       this.last_cps = Game.cookiesPs;
-      this.updateUI();
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
     } else if (JSON.stringify(this.config) !== JSON.stringify(this.last_config)) {
       this.last_config = { ...this.config };
-      this.updateUI();
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
     } else if (!document.querySelector("#productAcc0") || document.getElementById("upgrade0") && !document.getElementById("upgradeAcc0")) {
-      this.updateUI();
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
     }
   }
   function tick() {
@@ -316,9 +351,17 @@
     }
     this.tickCount++;
     if (this.tickCount >= 10) {
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
+    }
+    this.checkUpdateUI();
+    const now = Date.now();
+    const intervalTarget = Math.min(500, Math.max(250, Math.floor(this.config.updateMS / 3)));
+    this.minUiRefreshMs = intervalTarget;
+    if (this.uiDirty && now - this.lastUiRefreshAt >= this.minUiRefreshMs) {
       this.updateUI();
-    } else {
-      this.checkUpdateUI();
+      this.uiDirty = false;
+      this.lastUiRefreshAt = now;
     }
     this.scheduleNextTick(this.config.updateMS / 10);
   }
@@ -350,6 +393,10 @@
     this.stopSelfReloadWatcher();
     this.isDisposed = true;
     this.isLoaded = false;
+    this.simCache.clear();
+    this.notationCache.clear();
+    this.lastComputedAtByItem.clear();
+    this.highPriorityIds.clear();
     removeMenuHook(Game.customStatsMenu, this.statsMenuHook);
     removeMenuHook(Game.customOptionsMenu, this.optionsMenuHook);
     this.statsMenuHook = null;
@@ -4095,6 +4142,88 @@
   });
 
   // src/calc/sim.ts
+  function getCookieBucket() {
+    const cps = Math.max(1, Math.floor(Game.cookiesPs));
+    return Math.floor(Game.cookies / cps);
+  }
+  function getBuffSignature() {
+    return `${Math.floor(Game.unbuffedCps)}:${Math.floor(Game.cookiesPsRaw)}:${Math.floor(Game.globalCpsMult * 1e3)}`;
+  }
+  function getSimulationKey(me) {
+    const bank = this.getBankCookies();
+    const price = Math.floor(me.getPrice());
+    const common = [
+      me.id,
+      me.type,
+      me.amount,
+      me.bought,
+      price,
+      Math.floor(bank),
+      getCookieBucket(),
+      getBuffSignature(),
+      this.config.sortGrandmapocalypse ? 1 : 0,
+      this.config.sortWizardTower ? 1 : 0
+    ];
+    if (me.type === "building") {
+      const building = me;
+      const tierUnlock = Object.values(building.tieredUpgrades || {}).map((u) => `${u.id}:${u.bought}`).join(",");
+      common.push(tierUnlock);
+    }
+    return common.join("|");
+  }
+  function getItemToken(me) {
+    return `${me.type}:${me.id}`;
+  }
+  function percentile(values, p) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.min(sorted.length - 1, Math.max(0, Math.floor(p / 100 * (sorted.length - 1))));
+    return sorted[index];
+  }
+  function recordProfiler(durationMs, wasComputed) {
+    if (!this.config.enablePerfProfiler) {
+      return;
+    }
+    if (!this.profilerWindowStartedAt) {
+      this.profilerWindowStartedAt = Date.now();
+    }
+    this.profilerCallCount++;
+    if (wasComputed) {
+      this.profilerComputeCount++;
+    }
+    this.profilerDurationsMs.push(durationMs);
+    const elapsedMs = Date.now() - this.profilerWindowStartedAt;
+    if (elapsedMs < 5e3) {
+      return;
+    }
+    const callsPerSec = this.profilerCallCount / Math.max(1, elapsedMs / 1e3);
+    const avgMs = this.profilerDurationsMs.reduce((acc, value) => acc + value, 0) / Math.max(1, this.profilerDurationsMs.length);
+    const p95Ms = percentile(this.profilerDurationsMs, 95);
+    this.profilerLastAvgMs = avgMs;
+    this.profilerLastP95Ms = p95Ms;
+    console.log(
+      `[CPP profiler] updateBestCpsAcceleration calls/s=${callsPerSec.toFixed(2)} avg=${avgMs.toFixed(3)}ms p95=${p95Ms.toFixed(3)}ms computed=${this.profilerComputeCount}/${this.profilerCallCount}`
+    );
+    this.profilerWindowStartedAt = Date.now();
+    this.profilerCallCount = 0;
+    this.profilerComputeCount = 0;
+    this.profilerDurationsMs = [];
+  }
+  function tuneAdaptiveBudget() {
+    const observed = Math.max(this.profilerLastAvgMs, this.profilerLastP95Ms * 0.6);
+    if (!Number.isFinite(observed) || observed <= 0) {
+      this.adaptiveBudget = Math.max(this.minBudget, Math.min(this.maxBudget, this.simBudgetPerRefresh));
+      return this.adaptiveBudget;
+    }
+    const rawTarget = Math.floor(this.targetComputeMsPerRefresh / observed);
+    const targetBudget = Math.max(this.minBudget, Math.min(this.maxBudget, rawTarget));
+    if (targetBudget < this.adaptiveBudget) {
+      this.adaptiveBudget = Math.max(this.minBudget, this.adaptiveBudget - this.budgetBackoffStep);
+    } else if (targetBudget > this.adaptiveBudget) {
+      this.adaptiveBudget = Math.min(this.maxBudget, this.adaptiveBudget + 1);
+    }
+    return this.adaptiveBudget;
+  }
   function getBankCookies() {
     return Number(this.config.isBanking) * Number(this.config.bankingSeconds) * Game.cookiesPsRaw;
   }
@@ -4150,10 +4279,46 @@
     return sim;
   }
   function updateBestCpsAcceleration(me) {
+    const startedAt = performance.now();
+    const simKey = getSimulationKey.call(this, me);
+    const cacheKey = getItemToken(me);
+    const now = Date.now();
+    const lastComputedAt = this.lastComputedAtByItem.get(cacheKey) ?? 0;
+    const isStale = now - lastComputedAt >= this.maxStalenessMs;
+    const cached = this.simCache.get(cacheKey);
+    if (!isStale && cached && cached.key === simKey) {
+      me.BestCpsAcceleration = cached.bestCpsAcceleration;
+      me.BestBuyToAmount = cached.bestBuyToAmount;
+      me.BestWaitTime = cached.bestWaitTime;
+      recordProfiler.call(this, performance.now() - startedAt, false);
+      return;
+    }
+    if (this.simBudgetRemaining <= 0 && cached) {
+      me.BestCpsAcceleration = cached.bestCpsAcceleration;
+      me.BestBuyToAmount = cached.bestBuyToAmount;
+      me.BestWaitTime = cached.bestWaitTime;
+      this.pendingSimRecalc = true;
+      this.uiDirty = true;
+      this.highPriorityIds.add(cacheKey);
+      recordProfiler.call(this, performance.now() - startedAt, false);
+      return;
+    }
+    this.simBudgetRemaining = Math.max(0, this.simBudgetRemaining - 1);
     me.BestCpsAcceleration = 0;
     me.BestBuyToAmount = 0;
     me.BestWaitTime = Infinity;
-    if (this.isIgnored(me) || Game.cookies === 0) return;
+    if (this.isIgnored(me) || Game.cookies === 0) {
+      this.simCache.set(cacheKey, {
+        key: simKey,
+        bestCpsAcceleration: me.BestCpsAcceleration,
+        bestBuyToAmount: me.BestBuyToAmount,
+        bestWaitTime: me.BestWaitTime
+      });
+      this.lastComputedAtByItem.set(cacheKey, Date.now());
+      this.highPriorityIds.delete(cacheKey);
+      recordProfiler.call(this, performance.now() - startedAt, true);
+      return;
+    }
     const oldCps = Game.unbuffedCps;
     const sim = this.initSimData();
     const save2 = this.enterSandBox(me);
@@ -4201,6 +4366,15 @@
       if (nextTierUpgrade) nextTierUpgrade.bought = 0;
     }
     this.leaveSandBox(save2);
+    this.simCache.set(cacheKey, {
+      key: simKey,
+      bestCpsAcceleration: me.BestCpsAcceleration,
+      bestBuyToAmount: me.BestBuyToAmount,
+      bestWaitTime: me.BestWaitTime
+    });
+    this.lastComputedAtByItem.set(cacheKey, Date.now());
+    this.highPriorityIds.delete(cacheKey);
+    recordProfiler.call(this, performance.now() - startedAt, true);
   }
   function updateHelperOrder(all) {
     all.forEach((e) => e.BestHelperOrder = 0);
@@ -4329,11 +4503,47 @@
     }
     return (sorted[mid - 1] + sorted[mid]) / 2;
   }
+  function getItemToken2(me) {
+    return `${me.type}:${me.id}`;
+  }
+  function isElementLikelyVisible(el) {
+    if (!el || !el.isConnected) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
+  }
+  function getPriorityScore(me) {
+    const token = getItemToken2(me);
+    const now = Date.now();
+    const lastComputedAt = this.lastComputedAtByItem.get(token) ?? 0;
+    const staleMs = now - lastComputedAt;
+    const isStale = staleMs >= this.maxStalenessMs;
+    const isVisible = isElementLikelyVisible(me.l || null);
+    const nearAffordable = me.getPrice() <= Game.cookies + Math.max(Game.cookiesPs * 2, 1);
+    const isHighPriority = this.highPriorityIds.has(token);
+    let score = 0;
+    if (isStale) score += 1e3;
+    if (isHighPriority) score += 600;
+    if (isVisible) score += 300;
+    if (nearAffordable) score += 120;
+    score += Math.min(100, staleMs / 25);
+    return score;
+  }
   function updateNotation(me, avgAcc, metric) {
     me.waitingTime = this.calcWaitingTime(me);
+    const cacheId = `${me.type}:${me.id}`;
+    const nextOpacity = me.waitingTime && Game.cookies >= me.getPrice() ? "0.6" : "";
     if (me.type == "upgrade") {
       const inStoreId = Game.UpgradesInStore.indexOf(me);
       me.l = l("upgrade" + inStoreId);
+      if (me.l && me.l.dataset.cppHoverTracked !== "1") {
+        me.l.dataset.cppHoverTracked = "1";
+        me.l.addEventListener("mouseenter", () => {
+          this.highPriorityIds.add(cacheId);
+          this.uiDirty = true;
+        });
+      }
       let span = document.querySelector("#upgradeAcc" + me.id);
       if (!span) {
         span = document.createElement("span");
@@ -4348,30 +4558,58 @@
         span.style.zIndex = "20";
         me.l.appendChild(span);
       }
-      if (me.BestCpsAcceleration === 0) {
-        span.textContent = "";
-      } else {
+      let nextText = "";
+      let nextColorMode = "solid";
+      let nextColorValue = "";
+      if (me.BestCpsAcceleration !== 0) {
         const labelParts = [];
         if (metric) {
           labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
           labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
         }
-        span.textContent = labelParts.join(" ");
-        if (me.waitingTime) {
-          span.innerHTML = me.waitingTime + "<br>" + span.textContent;
+        const label = labelParts.join(" ");
+        nextText = me.waitingTime ? `${me.waitingTime}<br>${label}` : label;
+        if (me.BestHelperOrder) {
+          nextColorMode = "rainbow";
+        } else {
+          try {
+            nextColorValue = this.colorRender(me.BestCpsAcceleration);
+          } catch {
+            nextColorValue = "";
+          }
         }
-        if (me.waitingTime && Game.cookies >= me.getPrice()) {
-          me.l.style.opacity = "0.6";
+      }
+      const prev = this.notationCache.get(cacheId);
+      const isSame = prev && prev.text === nextText && prev.colorMode === nextColorMode && prev.colorValue === nextColorValue && prev.opacity === nextOpacity;
+      if (!isSame) {
+        span.innerHTML = nextText;
+        if (nextOpacity) {
+          me.l.style.opacity = nextOpacity;
         } else {
           me.l.style.removeProperty("opacity");
         }
-        if (me.BestHelperOrder) {
-          this.colorSpanInRainbow(span);
-        } else {
-          this.colorSpanByValue(span, me.BestCpsAcceleration);
+        if (nextText) {
+          if (nextColorMode === "rainbow") {
+            this.colorSpanInRainbow(span);
+          } else {
+            this.colorSpanByValue(span, me.BestCpsAcceleration);
+          }
         }
+        this.notationCache.set(cacheId, {
+          text: nextText,
+          colorMode: nextColorMode,
+          colorValue: nextColorValue,
+          opacity: nextOpacity
+        });
       }
     } else {
+      if (me.l && me.l.dataset.cppHoverTracked !== "1") {
+        me.l.dataset.cppHoverTracked = "1";
+        me.l.addEventListener("mouseenter", () => {
+          this.highPriorityIds.add(cacheId);
+          this.uiDirty = true;
+        });
+      }
       let span = document.querySelector("#productAcc" + me.id);
       if (!span) {
         span = document.createElement("span");
@@ -4381,35 +4619,57 @@
         span.style.filter = "contrast(1.5)";
         this.insertAfter(span, l("productPrice" + me.id));
       }
-      if (me.BestCpsAcceleration === 0) {
-        span.textContent = "";
-      } else {
+      let nextText = "";
+      let nextColorMode = "solid";
+      let nextColorValue = "";
+      if (me.BestCpsAcceleration !== 0) {
         const labelParts = [];
         if (metric) {
           labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
           labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
         }
-        span.textContent = labelParts.join(" \xB7 ");
+        nextText = labelParts.join(" \xB7 ");
         if (me.BestHelperOrder) {
           if (me.BestHelperAmount > me.amount + 1) {
-            span.textContent += " (to " + me.BestHelperAmount + ")";
+            nextText += " (to " + me.BestHelperAmount + ")";
           }
+          nextColorMode = "rainbow";
         } else if (me.BestBuyToAmount > me.amount + 1) {
-          span.textContent += " (to " + me.BestBuyToAmount + ")";
+          nextText += " (to " + me.BestBuyToAmount + ")";
         }
         if (me.waitingTime) {
-          span.textContent += " \u23F3" + me.waitingTime;
+          nextText += " \u23F3" + me.waitingTime;
         }
-        if (me.waitingTime && Game.cookies >= me.getPrice()) {
-          me.l.style.opacity = "0.6";
+        if (nextColorMode === "solid") {
+          try {
+            nextColorValue = this.colorRender(me.BestCpsAcceleration);
+          } catch {
+            nextColorValue = "";
+          }
+        }
+      }
+      const prev = this.notationCache.get(cacheId);
+      const isSame = prev && prev.text === nextText && prev.colorMode === nextColorMode && prev.colorValue === nextColorValue && prev.opacity === nextOpacity;
+      if (!isSame) {
+        span.textContent = nextText;
+        if (nextOpacity) {
+          me.l.style.opacity = nextOpacity;
         } else {
           me.l.style.removeProperty("opacity");
         }
-        if (me.BestHelperOrder) {
-          this.colorSpanInRainbow(span);
-        } else {
-          this.colorSpanByValue(span, me.BestCpsAcceleration);
+        if (nextText) {
+          if (nextColorMode === "rainbow") {
+            this.colorSpanInRainbow(span);
+          } else {
+            this.colorSpanByValue(span, me.BestCpsAcceleration);
+          }
         }
+        this.notationCache.set(cacheId, {
+          text: nextText,
+          colorMode: nextColorMode,
+          colorValue: nextColorValue,
+          opacity: nextOpacity
+        });
       }
     }
   }
@@ -4448,6 +4708,8 @@
   }
   function updateUI() {
     this.tickCount = 0;
+    const adaptiveBudget = this.tuneAdaptiveBudget();
+    this.pendingSimRecalc = false;
     const buildings = [];
     const upgrades = [...Game.UpgradesInStore];
     for (const building of Game.ObjectsById) {
@@ -4456,7 +4718,19 @@
       }
     }
     const all = [...buildings, ...upgrades];
-    all.forEach((me) => this.updateBestCpsAcceleration(me));
+    const now = Date.now();
+    const staleCount = all.filter((me) => {
+      const token = getItemToken2(me);
+      const lastComputedAt = this.lastComputedAtByItem.get(token) ?? 0;
+      return now - lastComputedAt >= this.maxStalenessMs;
+    }).length;
+    this.simBudgetPerRefresh = Math.max(this.minBudget, Math.min(this.maxBudget, adaptiveBudget));
+    this.simBudgetRemaining = Math.max(this.simBudgetPerRefresh, staleCount);
+    const candidates = [...all].sort((a, b) => getPriorityScore.call(this, b) - getPriorityScore.call(this, a));
+    candidates.forEach((me) => this.updateBestCpsAcceleration(me));
+    if (this.pendingSimRecalc) {
+      this.uiDirty = true;
+    }
     all.sort((a, b) => {
       if (a.BestCpsAcceleration === b.BestCpsAcceleration) {
         return 0;
@@ -4568,6 +4842,7 @@
   function autoBuyDiv() {
     const autoBuyDiv2 = document.createElement("div");
     autoBuyDiv2.appendChild(this.toggleButton("autoBuy", "Auto buy best deal"));
+    autoBuyDiv2.appendChild(this.toggleButton("enablePerfProfiler", "Enable perf profiler logs"));
     return autoBuyDiv2;
   }
   function bankingDiv() {
@@ -4709,6 +4984,28 @@
           this.config = { ...defaultConfig };
           this.last_config = { ...defaultConfig };
           this.colorRender = () => this.config.color0;
+          this.uiDirty = true;
+          this.lastUiRefreshAt = 0;
+          this.minUiRefreshMs = 300;
+          this.pendingSimRecalc = false;
+          this.simBudgetPerRefresh = 12;
+          this.simBudgetRemaining = 0;
+          this.adaptiveBudget = 12;
+          this.minBudget = 3;
+          this.maxBudget = 60;
+          this.budgetBackoffStep = 2;
+          this.targetComputeMsPerRefresh = 6;
+          this.maxStalenessMs = 1e3;
+          this.highPriorityIds = /* @__PURE__ */ new Set();
+          this.lastComputedAtByItem = /* @__PURE__ */ new Map();
+          this.simCache = /* @__PURE__ */ new Map();
+          this.notationCache = /* @__PURE__ */ new Map();
+          this.profilerWindowStartedAt = 0;
+          this.profilerCallCount = 0;
+          this.profilerComputeCount = 0;
+          this.profilerDurationsMs = [];
+          this.profilerLastAvgMs = 0;
+          this.profilerLastP95Ms = 0;
           this.register = register;
           this.init = init;
           this.load = load;
@@ -4725,6 +5022,7 @@
           this.leaveSandBox = leaveSandBox;
           this.initSimData = initSimData;
           this.updateBestCpsAcceleration = updateBestCpsAcceleration;
+          this.tuneAdaptiveBudget = tuneAdaptiveBudget;
           this.updateHelperOrder = updateHelperOrder;
           this.colorSpanInRainbow = colorSpanInRainbow;
           this.colorSpanByValue = colorSpanByValue;
@@ -4758,62 +5056,14 @@
     "src/index.ts"() {
       init_predictor();
       init_globals();
-      var cookieAssistantName = "Cookie Assistant";
-      var confirmBypassNeedles = [
-        "Loading a different version may cause errors.",
-        `Do you still want to load ${cookieAssistantName}?`
-      ];
-      function shouldBypassCookieAssistantConfirm(message) {
-        const text = String(message ?? "");
-        return confirmBypassNeedles.every((needle) => text.includes(needle));
-      }
-      function installConfirmBypass() {
-        const win = window;
-        if (!win.__cppConfirmBypassInstalled) {
-          win.__cppOriginalConfirm = win.__cppOriginalConfirm || win.confirm.bind(win);
-          win.confirm = ((message) => {
-            if (shouldBypassCookieAssistantConfirm(message)) {
-              return true;
-            }
-            return win.__cppOriginalConfirm(message);
-          });
-          win.__cppConfirmBypassInstalled = true;
-        }
-        const ccse = getCCSE();
-        if (!ccse || typeof ccse.ConfirmLoad !== "function") {
-          return;
-        }
-        const wrapped = ccse.ConfirmLoad;
-        if (wrapped.__cppWrapped) {
-          return;
-        }
-        const originalConfirmLoad = wrapped;
-        const patchedConfirmLoad = ((modName, modVersion, versionText) => {
-          if (modName === cookieAssistantName) {
-            return true;
-          }
-          return originalConfirmLoad(modName, modVersion, versionText);
-        });
-        patchedConfirmLoad.__cppWrapped = true;
-        ccse.ConfirmLoad = patchedConfirmLoad;
-      }
-      installConfirmBypass();
-      var bypassRetryTimer = setInterval(() => {
-        installConfirmBypass();
-      }, 1e3);
-      setTimeout(() => clearInterval(bypassRetryTimer), 3e4);
       var cookieProfitPredictor = new CookiePaybackPlanner();
       if (!cookieProfitPredictor.isLoaded) {
         const ccse = getCCSE();
         if (ccse && ccse.isLoaded) {
-          installConfirmBypass();
           cookieProfitPredictor.register();
         } else {
           const ensured = ensureCCSE();
-          ensured.postLoadHooks?.push(() => {
-            installConfirmBypass();
-            cookieProfitPredictor.register();
-          });
+          ensured.postLoadHooks?.push(() => cookieProfitPredictor.register());
         }
       }
     }

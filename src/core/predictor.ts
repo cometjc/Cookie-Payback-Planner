@@ -10,6 +10,7 @@ import {
   initSimData,
   isIgnored,
   leaveSandBox,
+  tuneAdaptiveBudget,
   updateBestCpsAcceleration,
   updateColorRender,
   updateHelperOrder,
@@ -74,6 +75,28 @@ export class CookiePaybackPlanner {
   config: Config = { ...defaultConfig };
   last_config: Config = { ...defaultConfig };
   colorRender: (value: number) => string = () => this.config.color0;
+  uiDirty = true;
+  lastUiRefreshAt = 0;
+  minUiRefreshMs = 300;
+  pendingSimRecalc = false;
+  simBudgetPerRefresh = 12;
+  simBudgetRemaining = 0;
+  adaptiveBudget = 12;
+  minBudget = 3;
+  maxBudget = 60;
+  budgetBackoffStep = 2;
+  targetComputeMsPerRefresh = 6;
+  maxStalenessMs = 1000;
+  highPriorityIds = new Set<string>();
+  lastComputedAtByItem = new Map<string, number>();
+  simCache = new Map<string, { key: string; bestCpsAcceleration: number; bestBuyToAmount: number; bestWaitTime: number }>();
+  notationCache = new Map<string, { text: string; colorMode: "rainbow" | "solid"; colorValue: string; opacity: string }>();
+  profilerWindowStartedAt = 0;
+  profilerCallCount = 0;
+  profilerComputeCount = 0;
+  profilerDurationsMs: number[] = [];
+  profilerLastAvgMs = 0;
+  profilerLastP95Ms = 0;
 
   register = register;
   init = init;
@@ -92,6 +115,7 @@ export class CookiePaybackPlanner {
   leaveSandBox = leaveSandBox;
   initSimData = initSimData;
   updateBestCpsAcceleration = updateBestCpsAcceleration;
+  tuneAdaptiveBudget = tuneAdaptiveBudget;
   updateHelperOrder = updateHelperOrder;
   colorSpanInRainbow = colorSpanInRainbow;
   colorSpanByValue = colorSpanByValue;

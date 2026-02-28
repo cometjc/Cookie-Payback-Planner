@@ -57,6 +57,7 @@ export function sortingDiv(this: CookiePaybackPlanner) {
 export function autoBuyDiv(this: CookiePaybackPlanner) {
   const autoBuyDiv = document.createElement("div");
   autoBuyDiv.appendChild(this.toggleButton("autoBuy", "Auto buy best deal"));
+  autoBuyDiv.appendChild(this.toggleButton("enablePerfProfiler", "Enable perf profiler logs"));
   return autoBuyDiv;
 }
 

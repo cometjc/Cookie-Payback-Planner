@@ -11,6 +11,7 @@ export interface Config {
   isBanking: boolean;
   bankingSeconds: number | boolean;
   updateMS: number;
+  enablePerfProfiler: boolean;
 }
 
 export const defaultConfig: Config = {
@@ -26,4 +27,5 @@ export const defaultConfig: Config = {
   isBanking: true,
   bankingSeconds: true,
   updateMS: 1000,
+  enablePerfProfiler: false,
 };

@@ -63,11 +63,51 @@ function calcMedian(values: number[]) {
   return (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+function getItemToken(me: Building | Upgrade) {
+  return `${me.type}:${me.id}`;
+}
+
+function isElementLikelyVisible(el: HTMLElement | null) {
+  if (!el || !el.isConnected) return false;
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+  const rect = el.getBoundingClientRect();
+  return rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
+}
+
+function getPriorityScore(this: CookiePaybackPlanner, me: Building | Upgrade) {
+  const token = getItemToken(me);
+  const now = Date.now();
+  const lastComputedAt = this.lastComputedAtByItem.get(token) ?? 0;
+  const staleMs = now - lastComputedAt;
+  const isStale = staleMs >= this.maxStalenessMs;
+  const isVisible = isElementLikelyVisible(me.l || null);
+  const nearAffordable = me.getPrice() <= Game.cookies + Math.max(Game.cookiesPs * 2, 1);
+  const isHighPriority = this.highPriorityIds.has(token);
+
+  let score = 0;
+  if (isStale) score += 1000;
+  if (isHighPriority) score += 600;
+  if (isVisible) score += 300;
+  if (nearAffordable) score += 120;
+  score += Math.min(100, staleMs / 25);
+  return score;
+}
+
 export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrade, avgAcc: number, metric?: RatioMetric) {
   me.waitingTime = this.calcWaitingTime(me);
+  const cacheId = `${me.type}:${me.id}`;
+  const nextOpacity = me.waitingTime && Game.cookies >= me.getPrice() ? "0.6" : "";
   if (me.type == "upgrade") {
     const inStoreId = Game.UpgradesInStore.indexOf(me as Upgrade);
     me.l = l("upgrade" + inStoreId);
+    if (me.l && me.l.dataset.cppHoverTracked !== "1") {
+      me.l.dataset.cppHoverTracked = "1";
+      me.l.addEventListener("mouseenter", () => {
+        this.highPriorityIds.add(cacheId);
+        this.uiDirty = true;
+      });
+    }
     let span = document.querySelector("#upgradeAcc" + me.id) as HTMLSpanElement | null;
     if (!span) {
       span = document.createElement("span");
@@ -83,30 +123,63 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
       me.l.appendChild(span);
     }
 
-    if (me.BestCpsAcceleration === 0) {
-      span.textContent = "";
-    } else {
+    let nextText = "";
+    let nextColorMode: "rainbow" | "solid" = "solid";
+    let nextColorValue = "";
+    if (me.BestCpsAcceleration !== 0) {
       const labelParts: string[] = [];
       if (metric) {
         labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
         labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
       }
-      span.textContent = labelParts.join(" ");
-      if (me.waitingTime) {
-        span.innerHTML = me.waitingTime + "<br>" + span.textContent;
+      const label = labelParts.join(" ");
+      nextText = me.waitingTime ? `${me.waitingTime}<br>${label}` : label;
+      if (me.BestHelperOrder) {
+        nextColorMode = "rainbow";
+      } else {
+        try {
+          nextColorValue = this.colorRender(me.BestCpsAcceleration);
+        } catch {
+          nextColorValue = "";
+        }
       }
-      if (me.waitingTime && Game.cookies >= me.getPrice()) {
-        me.l.style.opacity = "0.6";
+    }
+    const prev = this.notationCache.get(cacheId);
+    const isSame =
+      prev &&
+      prev.text === nextText &&
+      prev.colorMode === nextColorMode &&
+      prev.colorValue === nextColorValue &&
+      prev.opacity === nextOpacity;
+    if (!isSame) {
+      span.innerHTML = nextText;
+      if (nextOpacity) {
+        me.l.style.opacity = nextOpacity;
       } else {
         me.l.style.removeProperty("opacity");
       }
-      if (me.BestHelperOrder) {
-        this.colorSpanInRainbow(span);
-      } else {
-        this.colorSpanByValue(span, me.BestCpsAcceleration);
+      if (nextText) {
+        if (nextColorMode === "rainbow") {
+          this.colorSpanInRainbow(span);
+        } else {
+          this.colorSpanByValue(span, me.BestCpsAcceleration);
+        }
       }
+      this.notationCache.set(cacheId, {
+        text: nextText,
+        colorMode: nextColorMode,
+        colorValue: nextColorValue,
+        opacity: nextOpacity,
+      });
     }
   } else {
+    if (me.l && me.l.dataset.cppHoverTracked !== "1") {
+      me.l.dataset.cppHoverTracked = "1";
+      me.l.addEventListener("mouseenter", () => {
+        this.highPriorityIds.add(cacheId);
+        this.uiDirty = true;
+      });
+    }
     let span = document.querySelector("#productAcc" + me.id) as HTMLSpanElement | null;
     if (!span) {
       span = document.createElement("span");
@@ -117,35 +190,62 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
       this.insertAfter(span, l("productPrice" + me.id));
     }
 
-    if (me.BestCpsAcceleration === 0) {
-      span.textContent = "";
-    } else {
+    let nextText = "";
+    let nextColorMode: "rainbow" | "solid" = "solid";
+    let nextColorValue = "";
+    if (me.BestCpsAcceleration !== 0) {
       const labelParts: string[] = [];
       if (metric) {
         labelParts.push(`${ratingEmoji(metric.rankPercentile, metric.normalizedPercent)} ${formatOrdinalRank(metric.rankOrder)}`);
         labelParts.push(`${metric.normalizedPercent.toFixed(0)}%`);
       }
-      span.textContent = labelParts.join(" · ");
+      nextText = labelParts.join(" · ");
       if (me.BestHelperOrder) {
         if (me.BestHelperAmount > me.amount + 1) {
-          span.textContent += " (to " + me.BestHelperAmount + ")";
+          nextText += " (to " + me.BestHelperAmount + ")";
         }
+        nextColorMode = "rainbow";
       } else if (me.BestBuyToAmount > me.amount + 1) {
-        span.textContent += " (to " + me.BestBuyToAmount + ")";
+        nextText += " (to " + me.BestBuyToAmount + ")";
       }
       if (me.waitingTime) {
-        span.textContent += " ⏳" + me.waitingTime;
+        nextText += " ⏳" + me.waitingTime;
       }
-      if (me.waitingTime && Game.cookies >= me.getPrice()) {
-        me.l.style.opacity = "0.6";
+      if (nextColorMode === "solid") {
+        try {
+          nextColorValue = this.colorRender(me.BestCpsAcceleration);
+        } catch {
+          nextColorValue = "";
+        }
+      }
+    }
+    const prev = this.notationCache.get(cacheId);
+    const isSame =
+      prev &&
+      prev.text === nextText &&
+      prev.colorMode === nextColorMode &&
+      prev.colorValue === nextColorValue &&
+      prev.opacity === nextOpacity;
+    if (!isSame) {
+      span.textContent = nextText;
+      if (nextOpacity) {
+        me.l.style.opacity = nextOpacity;
       } else {
         me.l.style.removeProperty("opacity");
       }
-      if (me.BestHelperOrder) {
-        this.colorSpanInRainbow(span);
-      } else {
-        this.colorSpanByValue(span, me.BestCpsAcceleration);
+      if (nextText) {
+        if (nextColorMode === "rainbow") {
+          this.colorSpanInRainbow(span);
+        } else {
+          this.colorSpanByValue(span, me.BestCpsAcceleration);
+        }
       }
+      this.notationCache.set(cacheId, {
+        text: nextText,
+        colorMode: nextColorMode,
+        colorValue: nextColorValue,
+        opacity: nextOpacity,
+      });
     }
   }
 }
@@ -199,6 +299,8 @@ export function reorderBuildings(this: CookiePaybackPlanner, buildings: Building
 
 export function updateUI(this: CookiePaybackPlanner) {
   this.tickCount = 0;
+  const adaptiveBudget = this.tuneAdaptiveBudget();
+  this.pendingSimRecalc = false;
   const buildings: Building[] = [];
   const upgrades = [...Game.UpgradesInStore];
   for (const building of Game.ObjectsById) {
@@ -207,8 +309,19 @@ export function updateUI(this: CookiePaybackPlanner) {
     }
   }
   const all: Array<Building | Upgrade> = [...buildings, ...upgrades];
-
-  all.forEach((me) => this.updateBestCpsAcceleration(me));
+  const now = Date.now();
+  const staleCount = all.filter((me) => {
+    const token = getItemToken(me);
+    const lastComputedAt = this.lastComputedAtByItem.get(token) ?? 0;
+    return now - lastComputedAt >= this.maxStalenessMs;
+  }).length;
+  this.simBudgetPerRefresh = Math.max(this.minBudget, Math.min(this.maxBudget, adaptiveBudget));
+  this.simBudgetRemaining = Math.max(this.simBudgetPerRefresh, staleCount);
+  const candidates = [...all].sort((a, b) => getPriorityScore.call(this, b) - getPriorityScore.call(this, a));
+  candidates.forEach((me) => this.updateBestCpsAcceleration(me));
+  if (this.pendingSimRecalc) {
+    this.uiDirty = true;
+  }
 
   all.sort((a, b) => {
     if (a.BestCpsAcceleration === b.BestCpsAcceleration) {

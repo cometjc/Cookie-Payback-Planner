@@ -3,6 +3,99 @@ import type { Building, SimulateStatus, Upgrade } from "../types/game";
 import type { CookiePaybackPlanner } from "../core/predictor";
 import { Game } from "../core/globals";
 
+function getCookieBucket() {
+  const cps = Math.max(1, Math.floor(Game.cookiesPs));
+  return Math.floor(Game.cookies / cps);
+}
+
+function getBuffSignature() {
+  return `${Math.floor(Game.unbuffedCps)}:${Math.floor(Game.cookiesPsRaw)}:${Math.floor(Game.globalCpsMult * 1000)}`;
+}
+
+function getSimulationKey(this: CookiePaybackPlanner, me: Building | Upgrade) {
+  const bank = this.getBankCookies();
+  const price = Math.floor(me.getPrice());
+  const common = [
+    me.id,
+    me.type,
+    me.amount,
+    me.bought,
+    price,
+    Math.floor(bank),
+    getCookieBucket(),
+    getBuffSignature(),
+    this.config.sortGrandmapocalypse ? 1 : 0,
+    this.config.sortWizardTower ? 1 : 0,
+  ];
+  if (me.type === "building") {
+    const building = me as Building;
+    const tierUnlock = Object.values(building.tieredUpgrades || {})
+      .map((u) => `${u.id}:${u.bought}`)
+      .join(",");
+    common.push(tierUnlock);
+  }
+  return common.join("|");
+}
+
+function getItemToken(me: Building | Upgrade) {
+  return `${me.type}:${me.id}`;
+}
+
+function percentile(values: number[], p: number) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((p / 100) * (sorted.length - 1))));
+  return sorted[index];
+}
+
+function recordProfiler(this: CookiePaybackPlanner, durationMs: number, wasComputed: boolean) {
+  if (!this.config.enablePerfProfiler) {
+    return;
+  }
+  if (!this.profilerWindowStartedAt) {
+    this.profilerWindowStartedAt = Date.now();
+  }
+  this.profilerCallCount++;
+  if (wasComputed) {
+    this.profilerComputeCount++;
+  }
+  this.profilerDurationsMs.push(durationMs);
+
+  const elapsedMs = Date.now() - this.profilerWindowStartedAt;
+  if (elapsedMs < 5000) {
+    return;
+  }
+  const callsPerSec = this.profilerCallCount / Math.max(1, elapsedMs / 1000);
+  const avgMs =
+    this.profilerDurationsMs.reduce((acc, value) => acc + value, 0) / Math.max(1, this.profilerDurationsMs.length);
+  const p95Ms = percentile(this.profilerDurationsMs, 95);
+  this.profilerLastAvgMs = avgMs;
+  this.profilerLastP95Ms = p95Ms;
+  console.log(
+    `[CPP profiler] updateBestCpsAcceleration calls/s=${callsPerSec.toFixed(2)} avg=${avgMs.toFixed(3)}ms p95=${p95Ms.toFixed(3)}ms computed=${this.profilerComputeCount}/${this.profilerCallCount}`,
+  );
+  this.profilerWindowStartedAt = Date.now();
+  this.profilerCallCount = 0;
+  this.profilerComputeCount = 0;
+  this.profilerDurationsMs = [];
+}
+
+export function tuneAdaptiveBudget(this: CookiePaybackPlanner) {
+  const observed = Math.max(this.profilerLastAvgMs, this.profilerLastP95Ms * 0.6);
+  if (!Number.isFinite(observed) || observed <= 0) {
+    this.adaptiveBudget = Math.max(this.minBudget, Math.min(this.maxBudget, this.simBudgetPerRefresh));
+    return this.adaptiveBudget;
+  }
+  const rawTarget = Math.floor(this.targetComputeMsPerRefresh / observed);
+  const targetBudget = Math.max(this.minBudget, Math.min(this.maxBudget, rawTarget));
+  if (targetBudget < this.adaptiveBudget) {
+    this.adaptiveBudget = Math.max(this.minBudget, this.adaptiveBudget - this.budgetBackoffStep);
+  } else if (targetBudget > this.adaptiveBudget) {
+    this.adaptiveBudget = Math.min(this.maxBudget, this.adaptiveBudget + 1);
+  }
+  return this.adaptiveBudget;
+}
+
 export function getBankCookies(this: CookiePaybackPlanner) {
   return Number(this.config.isBanking) * Number(this.config.bankingSeconds) * Game.cookiesPsRaw;
 }
@@ -72,11 +165,48 @@ export function initSimData(this: CookiePaybackPlanner) {
 }
 
 export function updateBestCpsAcceleration(this: CookiePaybackPlanner, me: Building | Upgrade) {
+  const startedAt = performance.now();
+  const simKey = getSimulationKey.call(this, me);
+  const cacheKey = getItemToken(me);
+  const now = Date.now();
+  const lastComputedAt = this.lastComputedAtByItem.get(cacheKey) ?? 0;
+  const isStale = now - lastComputedAt >= this.maxStalenessMs;
+  const cached = this.simCache.get(cacheKey);
+  if (!isStale && cached && cached.key === simKey) {
+    me.BestCpsAcceleration = cached.bestCpsAcceleration;
+    me.BestBuyToAmount = cached.bestBuyToAmount;
+    me.BestWaitTime = cached.bestWaitTime;
+    recordProfiler.call(this, performance.now() - startedAt, false);
+    return;
+  }
+  if (this.simBudgetRemaining <= 0 && cached) {
+    me.BestCpsAcceleration = cached.bestCpsAcceleration;
+    me.BestBuyToAmount = cached.bestBuyToAmount;
+    me.BestWaitTime = cached.bestWaitTime;
+    this.pendingSimRecalc = true;
+    this.uiDirty = true;
+    this.highPriorityIds.add(cacheKey);
+    recordProfiler.call(this, performance.now() - startedAt, false);
+    return;
+  }
+  this.simBudgetRemaining = Math.max(0, this.simBudgetRemaining - 1);
+
   me.BestCpsAcceleration = 0;
   me.BestBuyToAmount = 0;
   me.BestWaitTime = Infinity;
 
-  if (this.isIgnored(me) || Game.cookies === 0) return;
+  if (this.isIgnored(me) || Game.cookies === 0) {
+    this.simCache.set(cacheKey, {
+      key: simKey,
+      bestCpsAcceleration: me.BestCpsAcceleration,
+      bestBuyToAmount: me.BestBuyToAmount,
+      bestWaitTime: me.BestWaitTime,
+    });
+    this.lastComputedAtByItem.set(cacheKey, Date.now());
+    this.highPriorityIds.delete(cacheKey);
+    recordProfiler.call(this, performance.now() - startedAt, true);
+    return;
+  }
 
   const oldCps = Game.unbuffedCps;
   const sim = this.initSimData();
@@ -127,6 +257,15 @@ export function updateBestCpsAcceleration(this: CookiePaybackPlanner, me: Buildi
     if (nextTierUpgrade) nextTierUpgrade.bought = 0;
   }
   this.leaveSandBox(save);
+  this.simCache.set(cacheKey, {
+    key: simKey,
+    bestCpsAcceleration: me.BestCpsAcceleration,
+    bestBuyToAmount: me.BestBuyToAmount,
+    bestWaitTime: me.BestWaitTime,
+  });
+  this.lastComputedAtByItem.set(cacheKey, Date.now());
+  this.highPriorityIds.delete(cacheKey);
+  recordProfiler.call(this, performance.now() - startedAt, true);
 }
 
 export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Building | Upgrade>) {

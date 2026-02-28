@@ -39,12 +39,27 @@ export function init(this: CookiePaybackPlanner) {
   this.originalRebuildUpgrades = Game.RebuildUpgrades;
   Game.RebuildUpgrades = () => {
     this.originalRebuildUpgrades?.();
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
+    for (const upgrade of Game.UpgradesInStore) {
+      this.highPriorityIds.add(`${upgrade.type}:${upgrade.id}`);
+    }
     this.checkUpdateUI();
   };
 
   this.originalRefreshStore = Game.RefreshStore;
   Game.RefreshStore = () => {
     this.originalRefreshStore?.();
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
+    for (const building of Game.ObjectsById) {
+      if (!building.l.classList.contains("toggledOff")) {
+        this.highPriorityIds.add(`${building.type}:${building.id}`);
+      }
+    }
+    for (const upgrade of Game.UpgradesInStore) {
+      this.highPriorityIds.add(`${upgrade.type}:${upgrade.id}`);
+    }
     this.checkUpdateUI();
   };
 
@@ -52,25 +67,41 @@ export function init(this: CookiePaybackPlanner) {
   Game.ClickProduct = (what: number) => {
     if (!Game.ObjectsById[what].waitingTime || Game.buyMode == -1) {
       Game.ObjectsById[what].buy();
+      this.uiDirty = true;
+      this.pendingSimRecalc = true;
+      const item = Game.ObjectsById[what];
+      this.highPriorityIds.add(`${item.type}:${item.id}`);
     }
   };
 
   this.originalUpgradeClick = Game.Upgrade.prototype.click;
   this.originalUpgradeClick2 = Game.Upgrade.prototype.click2 ?? null;
   Game.Upgrade.prototype.click2 = this.originalUpgradeClick;
+  const planner = this;
   Game.Upgrade.prototype.click = function (e: any) {
     const upgrade = this as any;
     if (upgrade.waitingTime && upgrade.BestCpsAcceleration) {
       return;
     }
-    return upgrade.click2(e);
+    const result = upgrade.click2(e);
+    planner.uiDirty = true;
+    planner.pendingSimRecalc = true;
+    planner.highPriorityIds.add(`${upgrade.type}:${upgrade.id}`);
+    return result;
   };
   this.hooksInstalled = true;
 
   this.config = { ...this.default_config };
   this.last_config = { ...this.default_config };
+  this.simCache.clear();
+  this.notationCache.clear();
+  this.lastComputedAtByItem.clear();
+  this.highPriorityIds.clear();
   this.isLoaded = true;
   this.isReloading = false;
+  this.uiDirty = true;
+  this.pendingSimRecalc = true;
+  this.lastUiRefreshAt = 0;
 
   const resumeDelay = consumeReloadTickDelay();
   this.startSelfReloadWatcher();
@@ -94,12 +125,15 @@ export function save(this: CookiePaybackPlanner) {
 export function checkUpdateUI(this: CookiePaybackPlanner) {
   if (this.last_cps !== Game.cookiesPs) {
     this.last_cps = Game.cookiesPs;
-    this.updateUI();
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
   } else if (JSON.stringify(this.config) !== JSON.stringify(this.last_config)) {
     this.last_config = { ...this.config };
-    this.updateUI();
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
   } else if (!document.querySelector("#productAcc0") || (document.getElementById("upgrade0") && !document.getElementById("upgradeAcc0"))) {
-    this.updateUI();
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
   }
 }
 
@@ -109,9 +143,17 @@ export function tick(this: CookiePaybackPlanner) {
   }
   this.tickCount++;
   if (this.tickCount >= 10) {
+    this.uiDirty = true;
+    this.pendingSimRecalc = true;
+  }
+  this.checkUpdateUI();
+  const now = Date.now();
+  const intervalTarget = Math.min(500, Math.max(250, Math.floor(this.config.updateMS / 3)));
+  this.minUiRefreshMs = intervalTarget;
+  if (this.uiDirty && now - this.lastUiRefreshAt >= this.minUiRefreshMs) {
     this.updateUI();
-  } else {
-    this.checkUpdateUI();
+    this.uiDirty = false;
+    this.lastUiRefreshAt = now;
   }
   this.scheduleNextTick(this.config.updateMS / 10);
 }
@@ -147,6 +189,10 @@ export function dispose(this: CookiePaybackPlanner, options?: { keepReloadState?
   this.stopSelfReloadWatcher();
   this.isDisposed = true;
   this.isLoaded = false;
+  this.simCache.clear();
+  this.notationCache.clear();
+  this.lastComputedAtByItem.clear();
+  this.highPriorityIds.clear();
 
   removeMenuHook(Game.customStatsMenu, this.statsMenuHook);
   removeMenuHook(Game.customOptionsMenu, this.optionsMenuHook);
