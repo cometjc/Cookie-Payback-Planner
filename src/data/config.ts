@@ -12,6 +12,7 @@ export interface Config {
   bankingSeconds: number | boolean;
   updateMS: number;
   enablePerfProfiler: boolean;
+  experimentalBatch: boolean;
   lookaheadTopK: number;
   strategyAlgorithm: "beam" | "astar";
   beamWidth: number;
@@ -49,6 +50,7 @@ export const defaultConfig: Config = {
   bankingSeconds: true,
   updateMS: 1000,
   enablePerfProfiler: false,
+  experimentalBatch: false,
   lookaheadTopK: 9,
   strategyAlgorithm: "beam",
   beamWidth: 5,

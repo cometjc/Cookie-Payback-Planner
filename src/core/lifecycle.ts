@@ -3,6 +3,16 @@ import type { CookiePaybackPlanner } from "./predictor";
 import { Game, ensureCCSE } from "./globals";
 import { consumeReloadTickDelay } from "./selfReload";
 import { getItemToken, normalizeItemType } from "../strategy/selectors";
+import {enterSandBox, leaveSandBox, getBankCookies} from "../calc/sim";
+import {projectLateBatchBank} from "../calc/projectionTrial";
+
+const ownData = (object: any, key: string) => {
+  if (object == null) return undefined;
+  const d = Object.getOwnPropertyDescriptor(object, key);
+  return d && Object.prototype.hasOwnProperty.call(d, "value") ? d.value : undefined;
+};
+const nativeBankMethods = (planner: CookiePaybackPlanner) => ownData(planner, "enterSandBox") === enterSandBox
+  && ownData(planner, "leaveSandBox") === leaveSandBox && ownData(planner, "getBankCookies") === getBankCookies;
 
 function getAutoBuyTickInterval(this: CookiePaybackPlanner) {
   const fps = Number.isFinite(Game.fps) && (Game.fps as number) > 0 ? (Game.fps as number) : 30;
@@ -229,7 +239,7 @@ function isCandidateStillValid(this: CookiePaybackPlanner, candidate: any, now: 
   return true;
 }
 
-function tryAutoBuyFromMainLoop(this: CookiePaybackPlanner) {
+export function tryAutoBuyFromMainLoop(this: CookiePaybackPlanner) {
   if (!this.config.autoBuy) {
     return;
   }
@@ -252,16 +262,101 @@ function tryAutoBuyFromMainLoop(this: CookiePaybackPlanner) {
       ? Math.max(0, Math.floor((candidate as any).BestBuyToAmount))
       : 0;
   const initialOwned = getItemOwnedCount(candidate);
+  const bulk = this.getCurrentBuyCount();
+  const batchUnits = normalizeItemType(candidate) === "building" && bulk > 1
+    ? bulk - initialOwned % bulk : 0;
+  if (batchUnits) {
+    // Probe native prices and reserves at every intermediate state before spending.
+    const originalCookies = Game.cookies;
+    const enteredNatively = batchUnits >= 32 && nativeBankMethods(this);
+    const sandbox = this.enterSandBox(candidate);
+    const sandboxWin = ownData(Game, "Win"), nativePrices: number[] = [];
+    const nativeBalances: number[] = [];
+    let remaining = Game.cookies, affordable = Number.isFinite(remaining);
+    try {
+      // Native buy defers gains until after the batch; validate that price path first.
+      for (let unit = 0; affordable && unit < batchUnits; unit++) {
+        const price = candidate.getPrice();
+        affordable = Number.isFinite(price) && price >= 0 && remaining >= price;
+        if (!affordable) break;
+        remaining -= price; Game.cookies = remaining;
+        nativeBalances.push(remaining);
+        if (enteredNatively) nativePrices.push(price);
+        candidate.amount++; candidate.bought++;
+      }
+      candidate.amount = sandbox.amount; candidate.bought = sandbox.bought;
+      Game.cookies = originalCookies; remaining = originalCookies;
+      let bankProven = false;
+      if (affordable && enteredNatively && nativeBankMethods(this)) {
+        let ledgerCash = originalCookies;
+        let consistent = typeof originalCookies === "number" && Number.isFinite(originalCookies)
+          && nativePrices.length === batchUnits && nativeBalances.length === batchUnits;
+        for (let unit = 0; consistent && unit < batchUnits; unit++) {
+          ledgerCash -= nativePrices[unit]; consistent = Object.is(ledgerCash, nativeBalances[unit]);
+        }
+        const config = ownData(this, "config"), seconds = ownData(config, "bankingSeconds");
+        const enabled = ownData(ownData(this, "performanceExperiment"), "productionProjectionEnabled");
+        const raw = ownData(Game, "cookiesPsRaw"), win = Object.getOwnPropertyDescriptor(Game, "Win"), originalWin = ownData(sandbox, "Win");
+        if (consistent && ownData(config, "isBanking") === true && enabled === true
+          && (typeof seconds === "number" || typeof seconds === "string" || typeof seconds === "boolean") && Number.isFinite(Number(seconds)) && Number(seconds) >= 0
+          && Number.isFinite(raw) && nativeBalances[batchUnits - 1] > Number(seconds) * raw
+          && win && Object.prototype.hasOwnProperty.call(win, "value") && win.writable && win.value === sandboxWin) {
+          let bound: number | undefined;
+          try { Game.Win = originalWin; bound = projectLateBatchBank(Game, candidate, batchUnits, Number(seconds), nativePrices); }
+          finally {
+            const current = Object.getOwnPropertyDescriptor(Game, "Win");
+            if (current && Object.prototype.hasOwnProperty.call(current, "value") && current.writable && current.value === originalWin) Game.Win = sandboxWin;
+          }
+          const restored = Object.getOwnPropertyDescriptor(Game, "Win");
+          bankProven = !!restored && Object.prototype.hasOwnProperty.call(restored, "value") && restored.value === sandboxWin
+            && bound !== undefined && nativeBalances.every(balance => balance > bound!);
+        }
+      }
+      for (let unit = 0; !bankProven && this.config.isBanking && affordable && unit < batchUnits; unit++) {
+        const price = candidate.getPrice(), bank = this.config.isBanking ? this.getBankCookies() : 0;
+        affordable = Number.isFinite(price) && price >= 0 && Number.isFinite(bank) && bank >= 0
+          && remaining - price >= bank && nativeBalances[unit] >= bank;
+        if (!affordable) break;
+        remaining -= price; Game.cookies = remaining;
+        candidate.amount++; candidate.bought++;
+        Game.CalculateGains();
+        const nextBank = this.config.isBanking ? this.getBankCookies() : 0;
+        affordable = Number.isFinite(nextBank) && nextBank >= 0 && remaining >= nextBank
+          && nativeBalances[unit] >= nextBank;
+      }
+    } finally { Game.cookies = originalCookies; this.leaveSandBox(sandbox); }
+    if (!affordable) return;
+    candidate.buy(batchUnits);
+    const units = Math.max(0, getItemOwnedCount(candidate) - initialOwned);
+    recordPurchaseUnits.call(this, units);
+    if (units > 0) {
+      this.autoBuyRateWindow.add(1, now);
+      this.autoBuyLastBoughtAt = now;
+      this.autoBuyBuyCount++;
+    }
+    this.highPriorityIds.add(getItemToken(candidate));
+    this.uiDirty = true; this.pendingSimRecalc = true;
+    this.autoBuyFastTrackUntil = now + this.autoBuyFastTrackUiMs;
+    return;
+  }
   const enforceTargetOwned = targetOwned > initialOwned;
-  const maxChainBuys = 50;
+  const maxChainBuys = this.config.isBanking && normalizeItemType(candidate) === "building"
+    ? Math.max(50, this.getCurrentBuyCount()) : 50;
   let totalBoughtUnits = 0;
   let chainBuys = 0;
   while (chainBuys < maxChainBuys) {
     const beforeOwned = getItemOwnedCount(candidate);
-    if (enforceTargetOwned && beforeOwned >= targetOwned) {
+    if (batchUnits ? beforeOwned >= initialOwned + batchUnits : enforceTargetOwned && beforeOwned >= targetOwned) {
       break;
     }
-    candidate.buy();
+    // Native bulk buys spend past the reserve; banking requires a check per unit.
+    if (this.config.isBanking) {
+      const price = candidate.getPrice(), bank = this.getBankCookies();
+      if (!Number.isFinite(price) || price < 0 || !Number.isFinite(bank) || bank < 0
+        || !Number.isFinite(Game.cookies) || Game.cookies - price < bank) break;
+      if (normalizeItemType(candidate) === "building") candidate.buy(1);
+      else candidate.buy();
+    } else candidate.buy();
     const afterOwned = getItemOwnedCount(candidate);
     const boughtUnits = Math.max(0, afterOwned - beforeOwned);
     if (boughtUnits <= 0) {
@@ -276,7 +371,7 @@ function tryAutoBuyFromMainLoop(this: CookiePaybackPlanner) {
     this.autoBuyRateWindow.add(1, boughtAt);
     this.autoBuyLastBoughtAt = boughtAt;
     this.autoBuyBuyCount++;
-    if (enforceTargetOwned && afterOwned >= targetOwned) {
+    if (batchUnits ? afterOwned >= initialOwned + batchUnits : enforceTargetOwned && afterOwned >= targetOwned) {
       break;
     }
   }
@@ -574,8 +669,9 @@ export function tick(this: CookiePaybackPlanner) {
     this.updateUI();
     const durationMs = performance.now() - startedAt;
     this.refreshDurationsMs.push(durationMs);
+    if (this.refreshDurationsMs.length > 120) this.refreshDurationsMs.splice(0, this.refreshDurationsMs.length - 120);
     this.refreshSuccessCount++;
-    this.uiDirty = false;
+    this.uiDirty = this.pendingSimRecalc;
     this.lastUiRefreshAt = now;
   } else if (this.uiDirty) {
     this.refreshSkipCount++;
@@ -606,6 +702,8 @@ function removeMenuHook<T>(hooks: T[], target: T | null) {
 }
 
 export function dispose(this: CookiePaybackPlanner, options?: { keepReloadState?: boolean }) {
+  this.stopPantheonBindingObserver?.();
+  this.stopPantheonBindingObserver = () => {};
   if (this.tickTimerId) {
     clearTimeout(this.tickTimerId);
     this.tickTimerId = null;

@@ -3,7 +3,7 @@
  "ID": "BestDealHelper",
  "Author": "Jethro Yu",
  "Description": "Just like Laplace's demon, but instead of predicting the universe, it’s all about cookies!",
- "ModVersion": 2053.4,
+ "ModVersion": 2054.16,
  "GameVersion": 2.053,
  "Date": "01/15/2026",
  "Dependencies": [

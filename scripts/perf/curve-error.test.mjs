@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {curveError} from './curve-error.mjs';
+assert.equal(curveError([{n: 0, cps: 1}, {n: 1, cps: 3}, {n: 2, cps: 5}], 'cps').maximumAbsolute, 0);
+const hiddenStep = curveError([{n: 0, cps: 1000}, {n: 1, cps: 1010}, {n: 2, cps: 1000}], 'cps');
+assert.equal(hiddenStep.maximumAbsolute, 10);
+assert.equal(hiddenStep.maximumGainRelative, Infinity);
+assert.equal(curveError([{n: 0, cps: 5}, {n: 1, cps: 5}], 'cps').maximumGainRelative, 0);
+assert.throws(() => curveError([{n: 1, cps: 5}, {n: 0, cps: 2}], 'cps'), /Invalid/);
+assert.throws(() => curveError([{n: 0, cps: 5}, {n: 1, cps: Infinity}], 'cps'), /Invalid/);
+console.log('curve errors: linear, interior discontinuity, zero gain, invalid samples pass');

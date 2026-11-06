@@ -1,10 +1,14 @@
 import { CookiePaybackPlanner } from "./core/predictor";
 import { App, Game, ensureCCSE, getCCSE } from "./core/globals";
+import {installPantheonBindingObserver} from "./calc/pantheonBinding";
 
 const cookieProfitPredictor = new CookiePaybackPlanner();
 const staleRegistered = (Game as any)?.mods?.[cookieProfitPredictor.name];
 if (staleRegistered?.isDisposed) {
   delete (Game as any).mods[cookieProfitPredictor.name];
+}
+if (!staleRegistered || staleRegistered.isDisposed) {
+  cookieProfitPredictor.stopPantheonBindingObserver = installPantheonBindingObserver(Game);
 }
 
 function tryRegisterMod() {

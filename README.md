@@ -7,6 +7,15 @@
 
 ---
 
+## 購買批次與實驗加速
+
+自動購買選10／100時補至下一個10／100倍數。例如123件選100，整批買77件至200；已200件則下一批至300。整批價格及銀行保留額不足時等待，不先買零散數量。升級維持原生單次購買。
+
+嚴格產量投影預設啟用；只加速已驗證的遊戲2.053來源與資料，未知版本、函式或模組效果回原生計算。正常啟動才能取得Pantheon來源綁定，熱載入可能回原生。這與下方的可選近似功能不同；已量測的效能改善與剩餘停頓見[結果報告](docs/performance-results.md)。
+
+設定中的 Experimental bulk100 acceleration 預設關閉。僅遊戲2.053、bulk100且補到下一100倍數需要超過5單位時，在付得起價格及銀行額的區間嘗試端點插值；等待區間、終點及其他狀態使用原生計算。每次更新輪替核對一棟建築；未核對或上次核對已超過10秒者維持原生計算。失配即停用、整輪回原生並清除策略快取。兩次核對間可能推薦不同，核對本身也可能造成停頓，屬實驗功能。
+
+日常驗證：`powershell -File scripts/dev.ps1 check`。最終遊戲效能須另做可見隔離副本量測；單元測試不能證明畫面不卡頓。
 ## 🧩 拆分說明
 `main.js` 已拆分為多個 TypeScript 模組，入口為 `src/index.ts`，透過 esbuild 打包輸出 `dist/main.js`。
 
@@ -54,5 +63,6 @@
 ---
 
 ## 🔗 資源
+- Windows 開發與效能比較：[常用指令](scripts/perf/README.md)、[比較設計](docs/performance-design.md)、[量測結果與限制](docs/performance-results.md)。
 - 📐 [設計與數學深度解析](https://docs.google.com/presentation/d/e/2PACX-1vQp7InxIx3edc27Q7gHLh5Imk4tE4CJdikBvQXP8oLmiGk5PNwoEjAvWqK6ZhdAbe4vflkm-VqSsu5D/pub?start=false&loop=false)
 - 🐞 [回報問題到 GitHub](https://github.com/cometjc/Cookie-Payback-Planner/issues)

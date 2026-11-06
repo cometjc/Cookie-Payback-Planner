@@ -1,0 +1,60 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {beginCrossover,endCrossover} from './crossover.mjs';
+test('natural crossover balances adjacent updates, preserves caches and restores after errors',()=>{
+  const api={current:'baseline'}, cache=new Map([['keep',7]]), seen=[];
+  let fail=false, raf, now=0, listener;
+  const original=function(){seen.push(api.current);now+=2;if(fail)throw Error('hook');};
+  const p={modId:'BestDealHelper',isLoaded:true,performanceExperiment:api,updateUI:original,simCache:cache};
+  const context=vm.createContext({Game:{ready:true,mods:{p}},document:{visibilityState:'visible',addEventListener:(_event,fn)=>{listener=fn;},removeEventListener:(_event,fn)=>{assert.equal(fn,listener);listener=null;}},performance:{now:()=>now},requestAnimationFrame:fn=>{raf=fn;return 1;},cancelAnimationFrame:()=>{}});
+  vm.runInContext(`(${beginCrossover})(42)`,context);
+  raf();
+  p.updateUI();raf();p.updateUI();raf();
+  assert.deepEqual([...seen].sort(),['baseline','indexed']);
+  assert.equal(p.simCache,cache);assert.equal(cache.get('keep'),7);assert.equal(api.current,'baseline');
+  fail=true;assert.throws(()=>p.updateUI(),/hook/);assert.equal(api.current,'baseline');
+  context.document.visibilityState='hidden';listener();context.document.visibilityState='visible';listener();
+  const result=vm.runInContext(`(${endCrossover})()`,context);
+  assert.equal(result.samples.length,3);assert.equal(result.frames.length,2);assert.equal(result.restored,true);assert.equal(p.updateUI,original);
+  assert.equal(result.hidden,true);assert.equal(listener,null);assert.equal(result.samples[2].failed,true);
+  assert.equal(vm.runInContext(`(${endCrossover})()`,context),null);
+  context.document.visibilityState='hidden';
+  assert.throws(()=>vm.runInContext(`(${beginCrossover})(42)`,context),/Visible ready baseline/);
+});
+test('building cache crossover switches only the cache flag and restores after errors',()=>{
+  const api={current:'baseline',buildingCpsCacheEnabled:false},seen=[];
+  const original=function(){seen.push(api.buildingCpsCacheEnabled);assert.equal(api.current,'baseline');if(seen.length===3)throw Error('compute');};
+  const p={modId:'BestDealHelper',isLoaded:true,performanceExperiment:api,updateUI:original};
+  const context=vm.createContext({Game:{ready:true,mods:{p}},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}},performance:{now:()=>0},requestAnimationFrame:()=>1,cancelAnimationFrame(){}});
+  vm.runInContext(`(${beginCrossover})(42,'building-cache')`,context);
+  p.updateUI();p.updateUI();
+  assert.deepEqual([...seen].sort(),[false,true]);assert.equal(api.buildingCpsCacheEnabled,false);
+  assert.throws(()=>p.updateUI(),/compute/);assert.equal(api.buildingCpsCacheEnabled,false);
+  const result=vm.runInContext(`(${endCrossover})()`,context);
+  assert.equal(result.candidate,'building-cache');assert.equal(result.restored,true);
+  assert.throws(()=>vm.runInContext(`(${beginCrossover})(42,'unknown')`,context),/Unknown/);
+});
+test('building model crossover restores both flags after errors',()=>{
+  const api={current:'baseline',buildingCpsCacheEnabled:false,buildingCpsModelEnabled:false},seen=[];
+  const original=()=>{seen.push([api.buildingCpsCacheEnabled,api.buildingCpsModelEnabled]);if(seen.length===3)throw Error('compute');};
+  const p={modId:'BestDealHelper',isLoaded:true,performanceExperiment:api,updateUI:original};
+  const context=vm.createContext({Game:{ready:true,mods:{p}},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}},performance:{now:()=>0},requestAnimationFrame:()=>1,cancelAnimationFrame(){}});
+  vm.runInContext(`(${beginCrossover})(42,'building-model')`,context);
+  p.updateUI();p.updateUI();
+  assert.deepEqual(seen.map(x=>x[0]).sort(),[false,true]);assert.ok(seen.every(x=>x[1]));
+  assert.equal(api.buildingCpsCacheEnabled,false);assert.equal(api.buildingCpsModelEnabled,false);
+  assert.throws(()=>p.updateUI(),/compute/);assert.equal(api.buildingCpsCacheEnabled,false);assert.equal(api.buildingCpsModelEnabled,false);
+  assert.equal(vm.runInContext(`(${endCrossover})()`,context).candidate,'building-model');
+});
+
+test('production projection crossover switches its flag and restores after errors',()=>{
+  const api={current:'baseline',productionProjectionEnabled:false},seen=[];
+  const original=()=>{seen.push(api.productionProjectionEnabled);if(seen.length===3)throw Error('compute');};
+  const p={modId:'BestDealHelper',isLoaded:true,performanceExperiment:api,updateUI:original};
+  const context=vm.createContext({Game:{ready:true,mods:{p}},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}},performance:{now:()=>0},requestAnimationFrame:()=>1,cancelAnimationFrame(){}});
+  vm.runInContext(`(${beginCrossover})(42,'production-projection')`,context);
+  p.updateUI();p.updateUI();assert.deepEqual([...seen].sort(),[false,true]);assert.equal(api.productionProjectionEnabled,false);
+  assert.throws(()=>p.updateUI(),/compute/);assert.equal(api.productionProjectionEnabled,false);
+  assert.equal(vm.runInContext(`(${endCrossover})()`,context).candidate,'production-projection');
+});

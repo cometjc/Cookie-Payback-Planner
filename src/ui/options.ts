@@ -59,6 +59,26 @@ export function autoBuyDiv(this: CookiePaybackPlanner) {
   const autoBuyDiv = document.createElement("div");
   autoBuyDiv.appendChild(this.toggleButton("autoBuy", "Auto buy best deal"));
   autoBuyDiv.appendChild(this.toggleButton("enablePerfProfiler", "Enable perf profiler logs"));
+  const button = document.createElement("button");
+  button.id = this.getButtonID("experimentalBatch");
+  button.type = "button";
+  button.classList.add("smallFancyButton", "prefButton", "option");
+  button.textContent = "Experimental bulk100 acceleration";
+  const hint = document.createElement("p");
+  hint.id = this.getButtonID("experimentalBatchHint");
+  hint.textContent = "Off by default. Game 2.053 only. One building is checked per update; unchecked buildings or checks older than 10 seconds use native calculations. Recommendations may differ between checks; any detected mismatch disables acceleration. Bank reserve checks remain native.";
+  button.setAttribute("aria-describedby", hint.id);
+  const update = () => {
+    button.setAttribute("aria-pressed", String(this.config.experimentalBatch));
+    button.classList.toggle("off", !this.config.experimentalBatch);
+  };
+  update();
+  button.addEventListener("click", () => {
+    this.config.experimentalBatch = !this.config.experimentalBatch;
+    this.markConfigDirty();
+    update();
+  });
+  autoBuyDiv.append(button, hint);
   return autoBuyDiv;
 }
 

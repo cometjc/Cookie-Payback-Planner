@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import process from "node:process";
+import path from "node:path";
+import { withGameLaunchGuard } from "./perf/process.mjs";
 import { getCookieRoot, loadProjectEnv, toCookieExe } from "./env-runtime.mjs";
 
 const defaultPort = 9222;
@@ -54,14 +56,17 @@ export function isCookieTarget(target) {
 }
 
 export async function getJson(debugOrigin, pathname) {
-  const response = await fetch(`${debugOrigin}${pathname}`);
+  const response = await fetch(`${debugOrigin}${pathname}`, { signal: AbortSignal.timeout(3000) });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} from ${pathname}`);
   }
   return response.json();
 }
 
-export function launchCookieClicker(cookieExePath, launchArgs, options = {}) {
+export async function launchCookieClicker(cookieExePath, launchArgs, options = {}) {
+  const portArgument = launchArgs.find(argument => argument.startsWith("--remote-debugging-port="));
+  const debugPort = portArgument ? portArgument.split("=")[1] : defaultPort;
+  return withGameLaunchGuard({ executable: cookieExePath, debugOrigin: options.debugOrigin || `http://127.0.0.1:${debugPort}` }, async () => {
   const launchMode = options.launchMode || "steam";
   const steamExePath = options.steamExePath || defaultSteamExe;
   const steamAppId = options.steamAppId || defaultSteamAppId;
@@ -76,6 +81,7 @@ export function launchCookieClicker(cookieExePath, launchArgs, options = {}) {
         stdio: "ignore",
         windowsHide: true,
       });
+      await new Promise((resolve, reject) => { steamChild.once("spawn", resolve); steamChild.once("error", reject); });
       steamChild.unref();
       return;
     }
@@ -86,11 +92,15 @@ export function launchCookieClicker(cookieExePath, launchArgs, options = {}) {
   print(`Args: ${launchArgs.join(" ") || "(none)"}`);
 
   const child = spawn(cookieExePath, launchArgs, {
+    cwd: path.dirname(cookieExePath),
     detached: true,
     stdio: "ignore",
     windowsHide: true,
   });
+  await new Promise((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
   child.unref();
+  return { expectedPid: child.pid };
+  });
 }
 
 function sleep(ms) {

@@ -1,4 +1,6 @@
 import type { Config } from "../data/config";
+import { PerformanceExperiment } from "../calc/performance";
+import { ExperimentalBatch } from "../calc/experimentalBatch";
 import type { AnyFunction, Building, Upgrade } from "../types/game";
 import { defaultConfig } from "../data/config";
 import type { SearchPath } from "../search/algorithms";
@@ -135,10 +137,13 @@ export class CookiePaybackPlanner {
   Upgrades = new Map<string, Upgrade>();
   default_config: Config = { ...defaultConfig };
   config: Config = { ...defaultConfig };
+  performanceExperiment = new PerformanceExperiment(this);
+  experimentalBatch = new ExperimentalBatch();
   last_config: Config = { ...defaultConfig };
   configRevision = 0;
   lastHandledConfigRevision = 0;
   colorRender: (value: number) => string = () => this.config.color0;
+  stopPantheonBindingObserver: () => void = () => {};
   uiDirty = true;
   lastUiRefreshAt = 0;
   minUiRefreshMs = 300;
@@ -150,6 +155,7 @@ export class CookiePaybackPlanner {
   maxBudget = 60;
   budgetBackoffStep = 2;
   targetComputeMsPerRefresh = 6;
+  simulationCostMs = 0;
   maxStalenessMs = 1000;
   highPriorityIds = new Set<string>();
   lastComputedAtByItem = new Map<string, number>();

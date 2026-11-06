@@ -3,23 +3,23 @@ import fs from "node:fs/promises";
 const INFO_PATH = "info.txt";
 
 function bumpModVersion(content) {
-  const modVersionPattern = /("ModVersion"\s*:\s*)(\d+)(?:\.(\d+))?(\s*,?)/;
+  const modVersionPattern = /("ModVersion"\s*:\s*)(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)(?=\s*[,}])/;
   const match = content.match(modVersionPattern);
 
   if (!match) {
     throw new Error("ModVersion not found in info.txt");
   }
 
-  const [, prefix, majorRaw, patchRaw, suffix] = match;
-  const major = Number.parseInt(majorRaw, 10);
-  const patch = patchRaw ? Number.parseInt(patchRaw, 10) : 0;
-
-  if (!Number.isFinite(major) || !Number.isFinite(patch)) {
+  const version = JSON.parse(content).ModVersion;
+  const ticks = Math.round(version * 100);
+  if (typeof version !== "number" || !Number.isFinite(version) || version < 0
+    || !Number.isSafeInteger(ticks) || !Number.isSafeInteger(ticks + 1)) {
     throw new Error(`Invalid ModVersion value: ${match[0]}`);
   }
-
-  const next = `${major}.${patch + 1}`;
-  return content.replace(modVersionPattern, `${prefix}${next}${suffix}`);
+  const next = (ticks + 1) / 100;
+  const updated = content.replace(modVersionPattern, `${match[1]}${next.toFixed(2)}`);
+  if (next <= version || JSON.parse(updated).ModVersion !== next) throw new Error("ModVersion must increase numerically");
+  return updated;
 }
 
 async function main() {

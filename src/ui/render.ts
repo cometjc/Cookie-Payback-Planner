@@ -10,6 +10,7 @@ import {
 } from "../strategy/selectors";
 import { maybeLogMetrics as maybeLogMetricsFromModule } from "../strategy/metrics";
 import { refreshStrategyScores as refreshStrategyScoresFromEngine } from "../strategy/engine";
+import { tryAutoBuyFromMainLoop } from "../core/lifecycle";
 
 export function insertAfter(this: CookiePaybackPlanner, newNode: Node, referenceNode: Node) {
   referenceNode.parentNode?.insertBefore(newNode, referenceNode.nextSibling);
@@ -26,9 +27,9 @@ export function colorSpanInRainbow(this: CookiePaybackPlanner, span: HTMLSpanEle
   }
 }
 
-export function colorSpanByValue(this: CookiePaybackPlanner, span: HTMLSpanElement, value: number) {
+export function colorSpanByValue(this: CookiePaybackPlanner, span: HTMLSpanElement, value: number, color?: string) {
   try {
-    span.style.color = this.colorRender(value);
+    span.style.color = color ?? this.colorRender(value);
   } catch {
     // ignore invalid colors
   }
@@ -145,7 +146,7 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
         this.uiDirty = true;
       });
     }
-    let span = document.querySelector("#upgradeAcc" + me.id) as HTMLSpanElement | null;
+    let span = document.getElementById("upgradeAcc" + me.id) as HTMLSpanElement | null;
     if (!span) {
       span = document.createElement("span");
       span.id = "upgradeAcc" + me.id;
@@ -183,14 +184,14 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
       prev.colorValue === nextColorValue &&
       prev.opacity === nextOpacity;
     if (!isSame) {
-      span.innerHTML = nextText;
+      if (span.innerHTML !== nextText) span.innerHTML = nextText;
       if (nextOpacity) {
         me.l.style.opacity = nextOpacity;
       } else {
         me.l.style.removeProperty("opacity");
       }
       if (nextText) {
-        this.colorSpanByValue(span, metric?.score ?? 0);
+        this.colorSpanByValue(span, metric?.score ?? 0, nextColorValue || undefined);
       }
       this.notationCache.set(cacheId, {
         text: nextText,
@@ -207,7 +208,7 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
         this.uiDirty = true;
       });
     }
-    let span = document.querySelector("#productAcc" + me.id) as HTMLSpanElement | null;
+    let span = document.getElementById("productAcc" + me.id) as HTMLSpanElement | null;
     if (!span) {
       span = document.createElement("span");
       span.id = "productAcc" + me.id;
@@ -247,14 +248,14 @@ export function updateNotation(this: CookiePaybackPlanner, me: Building | Upgrad
       prev.colorValue === nextColorValue &&
       prev.opacity === nextOpacity;
     if (!isSame) {
-      span.textContent = nextText;
+      if (span.textContent !== nextText) span.textContent = nextText;
       if (nextOpacity) {
         me.l.style.opacity = nextOpacity;
       } else {
         me.l.style.removeProperty("opacity");
       }
       if (nextText) {
-        this.colorSpanByValue(span, metric?.score ?? 0);
+        this.colorSpanByValue(span, metric?.score ?? 0, nextColorValue || undefined);
       }
       this.notationCache.set(cacheId, {
         text: nextText,
@@ -272,6 +273,21 @@ export function arrayCommonInTheSameOrder(this: CookiePaybackPlanner, a: unknown
   const filteredA = a.filter((e) => bSet.has(e));
   const filteredB = b.filter((e) => aSet.has(e));
   return filteredA.every((value, index) => value === filteredB[index]);
+}
+
+function prependOrdered(parent: HTMLElement | null, nodes: HTMLElement[], bar: HTMLElement | null = null) {
+  if (!parent) return;
+  // ponytail: one backward pass; use a longest increasing subsequence diff if move counts still dominate.
+  const atomicMove = (parent as HTMLElement & {moveBefore?: (node: Node, before: ChildNode | null) => void}).moveBefore;
+  const selected = new Set<Node>(nodes);
+  let next = [...parent.childNodes].find(node => node !== bar && !selected.has(node)) ?? null;
+  const move = (node: HTMLElement, before: ChildNode | null) => {
+    if (node === before || node.parentNode === parent && node.nextSibling === before) return;
+    if (typeof atomicMove === "function" && node.isConnected && parent.isConnected && node.ownerDocument === parent.ownerDocument) atomicMove.call(parent, node, before);
+    else parent.insertBefore(node, before);
+  };
+  for (let i = nodes.length - 1; i >= 0; i--) { move(nodes[i], next); next = nodes[i]; }
+  if (bar && parent.firstChild !== bar) move(bar, parent.firstChild);
 }
 
 export function reorderUpgrades(this: CookiePaybackPlanner, upgrades: Upgrade[]) {
@@ -295,15 +311,9 @@ export function reorderUpgrades(this: CookiePaybackPlanner, upgrades: Upgrade[])
 
   const divTechUpgrades = document.querySelector("#techUpgrades") as HTMLElement | null;
   const divUpgrades = document.querySelector("#upgrades") as HTMLElement | null;
-  filtered.reverse().forEach((upgrade) => {
-    if (upgrade.pool === "tech") {
-      divTechUpgrades?.prepend(upgrade.l);
-    } else {
-      divUpgrades?.prepend(upgrade.l);
-    }
-  });
   const buyAllBar = l("storeBuyAll");
-  if (buyAllBar && divUpgrades) divUpgrades.prepend(buyAllBar);
+  prependOrdered(divTechUpgrades, filtered.filter(upgrade => upgrade.pool === "tech").map(upgrade => upgrade.l));
+  prependOrdered(divUpgrades, filtered.filter(upgrade => upgrade.pool !== "tech").map(upgrade => upgrade.l), buyAllBar);
 }
 
 export function reorderBuildings(this: CookiePaybackPlanner, buildings: Building[]) {
@@ -315,14 +325,8 @@ export function reorderBuildings(this: CookiePaybackPlanner, buildings: Building
   if (this.arrayCommonInTheSameOrder(buildings_order, building_order_on_page)) return;
 
   const product = document.querySelector("#products") as HTMLElement | null;
-  buildings
-    .slice()
-    .reverse()
-    .forEach((building) => {
-      product?.prepend(building.l);
-    });
   const bulkBar = l("storeBulk");
-  if (bulkBar && product) product.prepend(bulkBar);
+  prependOrdered(product, buildings.map(building => building.l), bulkBar);
 }
 
 export function reapplyLastKnownStoreOrder(this: CookiePaybackPlanner) {
@@ -380,7 +384,7 @@ export function reapplyLastKnownNotationFromCache(this: CookiePaybackPlanner) {
     if (!cached) {
       continue;
     }
-    let span = document.querySelector("#productAcc" + building.id) as HTMLSpanElement | null;
+    let span = document.getElementById("productAcc" + building.id) as HTMLSpanElement | null;
     if (!span) {
       span = document.createElement("span");
       span.id = "productAcc" + building.id;
@@ -389,7 +393,7 @@ export function reapplyLastKnownNotationFromCache(this: CookiePaybackPlanner) {
       span.style.filter = "contrast(1.5)";
       this.insertAfter(span, l("productPrice" + building.id));
     }
-    span.textContent = cached.text;
+    if (span.textContent !== cached.text) span.textContent = cached.text;
     if (cached.opacity) {
       building.l.style.opacity = cached.opacity;
     } else {
@@ -413,7 +417,7 @@ export function reapplyLastKnownNotationFromCache(this: CookiePaybackPlanner) {
     if (!upgradeElement) {
       continue;
     }
-    let span = document.querySelector("#upgradeAcc" + upgrade.id) as HTMLSpanElement | null;
+    let span = document.getElementById("upgradeAcc" + upgrade.id) as HTMLSpanElement | null;
     if (!span) {
       span = document.createElement("span");
       span.id = "upgradeAcc" + upgrade.id;
@@ -427,7 +431,7 @@ export function reapplyLastKnownNotationFromCache(this: CookiePaybackPlanner) {
       span.style.zIndex = "20";
       upgradeElement.appendChild(span);
     }
-    span.innerHTML = cached.text;
+    if (span.innerHTML !== cached.text) span.innerHTML = cached.text;
     if (cached.opacity) {
       upgradeElement.style.opacity = cached.opacity;
     } else {
@@ -442,6 +446,10 @@ export function reapplyLastKnownNotationFromCache(this: CookiePaybackPlanner) {
 }
 
 export function updateUI(this: CookiePaybackPlanner) {
+  return this.performanceExperiment.withRefresh(() => updateUIInRefresh.call(this));
+}
+
+function updateUIInRefresh(this: CookiePaybackPlanner) {
   this.tickCount = 0;
   this.sampleSmoothedClickCps();
   const adaptiveBudget = this.tuneAdaptiveBudget();
@@ -470,10 +478,15 @@ export function updateUI(this: CookiePaybackPlanner) {
   }).length;
   this.simBudgetPerRefresh = Math.max(this.minBudget, Math.min(this.maxBudget, adaptiveBudget));
   this.simBudgetRemaining = Math.max(this.simBudgetPerRefresh, staleCount);
-  const candidates = [...all].sort(
-    (a, b) => getPriorityScore.call(this, b, now, visibleTokens) - getPriorityScore.call(this, a, now, visibleTokens)
-  );
-  candidates.forEach((me) => this.updateBestCpsAcceleration(me));
+  // Same score as the comparator, calculated once instead of per comparison.
+  const priority = new Map(all.map((me) => [me, getPriorityScore.call(this, me, now, visibleTokens)]));
+  const candidates = [...all].sort((a, b) => priority.get(b)! - priority.get(a)!);
+  this.experimentalBatch.run(Game, this, candidates);
+  const experimentalButton = document.getElementById(this.getButtonID("experimentalBatch"));
+  if (experimentalButton) {
+    experimentalButton.setAttribute("aria-pressed", String(this.config.experimentalBatch));
+    experimentalButton.classList.toggle("off", !this.config.experimentalBatch);
+  }
   if (this.pendingSimRecalc) {
     this.uiDirty = true;
   }
@@ -553,8 +566,8 @@ export function updateUI(this: CookiePaybackPlanner) {
     const waitSec = this.estimateWaitSeconds(item.getPrice(), Game.cookies, Game.unbuffedCps);
     return { item, token, score, waitSec };
   });
-  if (typeof Game.registerHook !== "function" && this.config.autoBuy && bestCandidate && bestCandidate.waitingTime === "" && Game.buyMode == 1) {
-    bestCandidate.buy();
+  if (typeof Game.registerHook !== "function") {
+    tryAutoBuyFromMainLoop.call(this);
   }
   if (bestCandidate && !this.pendingSimRecalc) {
     this.autoBuyAwaitingFreshBestDeal = false;

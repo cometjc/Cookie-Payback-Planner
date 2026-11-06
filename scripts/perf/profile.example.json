@@ -1,0 +1,19 @@
+{
+  "sourceRoot": "D:/SteamLibrary/steamapps/common/Cookie Clicker",
+  "isolationRoot": "../../tmp/perf-game",
+  "executable": "../../tmp/perf-game/Cookie Clicker.exe",
+  "debugOrigin": "http://127.0.0.1:9222",
+  "output": "../../tmp/perf-comparison",
+  "language": "ZH-CN",
+  "warmupMs": 15000,
+  "sampleMs": 60000,
+  "repetitions": 3,
+  "seed": 20261101,
+  "readyTimeoutMs": 90000,
+  "variants": [
+    { "id": "baseline", "builtin": true },
+    { "id": "indexed", "builtin": true },
+    { "id": "compiled", "builtin": true },
+    { "id": "search", "builtin": true }
+  ]
+}

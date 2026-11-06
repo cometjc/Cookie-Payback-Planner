@@ -1,4 +1,5 @@
 import process from "node:process";
+import { gameProcesses } from "./perf/process.mjs";
 import {
   collectTargetInfo,
   getInspectConfig,
@@ -13,6 +14,8 @@ import {
 async function main() {
   const config = getInspectConfig();
   print("Starting automatic inspect flow...");
+  const running = process.platform === "win32" ? await gameProcesses(config.cookieExePath) : [];
+  if (running.length > 1) throw new Error("偵測到多個遊戲主程序，拒絕繼續。");
 
   try {
     const existing = await collectTargetInfo(config.debugOrigin);
@@ -24,10 +27,11 @@ async function main() {
       return;
     }
   } catch {
-    // No existing endpoint, continue to launch flow.
+    if (running.length) throw new Error("遊戲已啟動但 CDP 不可用，拒絕重複啟動。");
   }
+  if (running.length) throw new Error("遊戲已啟動但未找到可量測頁面，拒絕重複啟動。");
 
-  launchCookieClicker(config.cookieExePath, config.launchArgs, {
+  await launchCookieClicker(config.cookieExePath, config.launchArgs, {
     launchMode: config.launchMode,
     steamExePath: config.steamExePath,
     steamAppId: config.steamAppId,
@@ -38,7 +42,7 @@ async function main() {
   if (!ready) {
     if (config.launchMode === "steam" && config.steamFallbackToExe) {
       printError("Steam launch did not expose CDP endpoint; trying direct exe fallback.");
-      launchCookieClicker(config.cookieExePath, config.launchArgs, { launchMode: "exe" });
+      await launchCookieClicker(config.cookieExePath, config.launchArgs, { launchMode: "exe" });
       const fallbackReady = await waitForCdpReady(config.debugOrigin, config.maxWaitMs, config.pollIntervalMs);
       if (!fallbackReady) {
         printError("Timed out waiting for CDP endpoint even after fallback.");

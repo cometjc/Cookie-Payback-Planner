@@ -1,24 +1,55 @@
-# Agent Guide
+# 專案代理指南
 
-## Project Summary
-- Cookie Clicker mod named "Cookie Payback Planner" (original mod id: BestDealHelper).
-- Main mod logic is in `main.js`; metadata lives in `info.txt`.
+## 專案與原始碼
 
-## Repo Structure
-- `main.js`: Core mod implementation and runtime hooks.
-- `info.txt`: Mod metadata (name, id, version, dependencies).
-- `chroma-js` (bundled into `main.js` by esbuild): color library used by the mod.
-- `README.md`: Feature overview and links.
-- `RELEASE.md`, `CHANGELOG.md`: Release notes and history.
-- `tsconfig.json`: JS type-checking config (allowJs + checkJs).
+- 本專案是 Cookie Clicker 模組 Cookie Payback Planner，模組識別字為 `BestDealHelper`。
+- `src/index.ts` 是入口；`src/core/` 管理生命週期，`src/calc/` 負責模擬，`src/search/` 與 `src/strategy/` 負責推薦策略，`src/ui/` 負責畫面，`src/types/` 放型別。
+- `dist/main.js` 是 esbuild 產物；修改 `src/` 後重新建置，不直接修改產物。
+- `info.txt` 是模組中繼資料；`README.md`、`CHANGELOG.md`、`RELEASE.md` 記錄使用方式與版本資訊。
+- 保持 Cookie Clicker 的 `Game.registerMod` 載入相容性。色彩計算維持從 `chroma-js` 匯入，由 esbuild 打包。
 
-## Conventions
-- Keep compatibility with Cookie Clicker mod loader (`Game.registerMod` usage).
-- Keep chroma usage via `chroma-js` imports in `src/main.js`.
-- Prefer small, incremental changes in `main.js` and keep JSDoc typings.
+## 溝通與執行
 
-## Common Commands
-- Type-check (if `tsc` is available): `tsc --noEmit`
+- 面向使用者的說明使用繁體中文，精簡陳述變更、證據與限制；識別字及命令可保留原文。數學表達使用純文字或 Unicode，不使用 TeX。
+- Windows 預設使用 PowerShell；需要澄清時使用宿主原生提問工具，不使用 AUQ。提問工具不可用時，明確提出問題並保留相依工作的等待狀態。
+- 開始時核對版本庫、分支、工作樹與未提交修改；寫入前建立或接管隔離工作樹，所有命令明確指定工作目錄。
+- 保留既有修改；不得擅自覆寫、還原或提交其他工作。提交訊息採 Conventional Commits。
+- 優先使用環境實際可用的原生工具。必要工具缺失時記錄阻塞與續接點，不假稱執行成功；替代強制流程須取得適用授權。
+- 不自行修改或擴張全域規則，不將單次工具替代授權視為永久豁免。外部任務同步不可用時，保留本機計畫並明示未同步。
+- 不輸出或提交 `.env`、存檔內容及憑證；祕密透過既有安全來源傳入程序。
 
-## Tests
-- No automated tests configured.
+## 階段提交
+
+- 每完成一個可獨立驗證的階段，立即建立 Minimum Viable Change（MVC）commit；只納入該階段必要檔案與驗證，不累積跨階段 unstaged code。提交前檢查 staged diff，保留其他工作修改。
+
+## 計畫維護
+
+- plan.md 只保留目標、決策、待辦與最新續接點；狀態變更更新既有條目，不追加逐輪流水紀錄。
+- 測試細節、結論與限制放結果報告（本效能任務使用 `docs/performance-results.md`）；原始採樣與執行紀錄留 ignored `tmp/`，計畫只連結證據位置。
+- 完成或失效的續接資訊應刪除或合併；歷史細節從 Git 取回。
+
+## 驗證命令
+
+從目前工作樹執行，依變更範圍選擇必要檢查：
+
+```powershell
+npm run typecheck
+npm run lint:src
+npm run test:run
+npm run build
+```
+
+- 型別檢查使用 TypeScript，測試使用 Vitest；設定分別見 `tsconfig.json` 與 `vitest.config.ts`。
+- 完成回報須列出實際執行的檢查與限制。尚未執行或失敗的檢查不得標為通過。
+- `npm run deploy` 會建置並寫入遊戲模組目錄；執行前核對實際目標路徑與本次授權。
+
+## 遊戲程序與效能量測
+
+- 啟動前同時檢查指定遊戲路徑的主程序與 CDP 連線；Electron 的渲染及 GPU 子程序不算獨立遊戲實例。
+- 主程序已存在而 CDP 不通時，先診斷連線與設定，不得因此再次啟動。存在多個主程序時先停止量測並釐清實例。
+- 記錄本次建立的 PID、程序身分與啟動時間；自動關閉只限本次擁有且身分仍相符的程序，優先正常關閉，不以程序名稱批次終止。
+- 正式存檔與模組設定須受保護。比較前記錄遊戲版本、模組版本及載入順序、設定、存檔快照身分與測試方案；還原或載入快照不得覆蓋使用者正在進行的遊戲。
+- 共存模組比較使用相同存檔起點與模組組合，固定暖機及量測時間、重複次數並打亂方案順序；狀態不一致時標為不可直接比較。
+- 保存原始採樣與結果摘要，至少比較更新耗時分位數、最長阻塞、畫面幀間隔及推薦品質。平均 CPU 用量不足以證明卡頓已解決。
+- 預索引或預編譯模型遇到未知遊戲版本、規則或模組效果時回退到已支援的計算路徑；驗證推薦排序與收益誤差後，才採用效能改善。
+- 診斷資料放在本機暫存目錄或解析後的 Git 中繼資料目錄；提交前確認未納入存檔、憑證與原始採樣。

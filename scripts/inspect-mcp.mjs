@@ -41,7 +41,7 @@ async function main() {
       return;
     }
   } else {
-    launchCookieClicker(config.cookieExePath, config.launchArgs, {
+    await launchCookieClicker(config.cookieExePath, config.launchArgs, {
       launchMode: config.launchMode,
       steamExePath: config.steamExePath,
       steamAppId: config.steamAppId,
@@ -51,7 +51,7 @@ async function main() {
     if (!ready) {
       if (config.launchMode === "steam" && config.steamFallbackToExe) {
         printError("Steam launch did not expose CDP endpoint; trying direct exe fallback.");
-        launchCookieClicker(config.cookieExePath, config.launchArgs, { launchMode: "exe" });
+        await launchCookieClicker(config.cookieExePath, config.launchArgs, { launchMode: "exe" });
         const fallbackReady = await waitForCdpReady(
           config.debugOrigin,
           config.maxWaitMs,

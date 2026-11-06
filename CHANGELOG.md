@@ -3,6 +3,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+### Fix
+- Validate deferred-gains native bulk prices against each step's bank reserve before buying; projected building trials also fill the next ownership multiple.
+- Bulk auto-buy preflight tracks the remaining cookie balance, then restores it, so balance-dependent prices cannot be checked against an unspent balance.
+- Refresh pending native gains before scoring purchases, preventing stale production from distorting recommendations and experimental audits.
+- Auto-buy x10/x100 fills the next ownership multiple using one native batch, after checking batch prices and bank reserves.
+- Include measured click income in simulation cache invalidation; measure adaptive simulation cost without enabling diagnostic logs.
+### Improve
+- Use exact building projections for verified Cookie Clicker 2.053 rules; unknown rules and hooks keep native calculation.
+- Skip intermediate production only when the guarded model proves the whole batch affordable, including bank reserves.
+- Optional experimental bulk100 approximation skips only affordable steps; strict calculation remains the default, with native audits and mismatch diagnostics.
+- Add isolated profiling, purchase observation, unlock probes and repeatable Windows commands.
+
 ## [2053.4] - 2026.03.01
 ### Improve
 - Make auto-buy simulation aware of current bulk buy count (x1/x10/x100), including tier unlock projections.

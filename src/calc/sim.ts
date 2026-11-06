@@ -1,4 +1,7 @@
 import chroma from "chroma-js";
+import { withBuildingCpsCache } from "./buildingCpsCache";
+import { projectBuildingTrial } from "./projectionTrial";
+import { getCurrentBuyCount } from "../core/lifecycle";
 import type { Building, SimulateStatus, Upgrade } from "../types/game";
 import type { CookiePaybackPlanner } from "../core/predictor";
 import { Game } from "../core/globals";
@@ -81,6 +84,9 @@ function collectTimedBuffWindows(this: CookiePaybackPlanner, elapsedOffsetSec = 
   const buffs = ((Game as any).buffs ?? {}) as Record<string, any>;
   const fps = Number.isFinite(Game.fps) && (Game.fps as number) > 0 ? (Game.fps as number) : 30;
   const nowMs = Date.now();
+  if (this.performanceExperiment.optimized) {
+    return this.performanceExperiment.collect(buffs, fps, nowMs, elapsedOffsetSec);
+  }
   const activeObservationKeys = new Set<string>();
   const windows: TimedCpsWindow[] = [];
   for (const [buffSlot, buff] of Object.entries(buffs)) {
@@ -116,6 +122,10 @@ function collectTimedBuffWindows(this: CookiePaybackPlanner, elapsedOffsetSec = 
 }
 
 function getTimedBuffWindowsSummary(this: CookiePaybackPlanner) {
+  if (this.performanceExperiment.optimized) {
+    const fps = Number.isFinite(Game.fps) && (Game.fps as number) > 0 ? (Game.fps as number) : 30;
+    return this.performanceExperiment.summary((Game as any).buffs ?? {}, fps, Date.now());
+  }
   collectTimedBuffWindows.call(this, 0);
   const buffs = ((Game as any).buffs ?? {}) as Record<string, any>;
   const normalized = Object.entries(buffs)
@@ -160,6 +170,10 @@ function estimateWaitWithTimedWindows(
   }
   const safeBasePassiveCps = Math.max(0, basePassiveCps);
   const safeBaseClickCps = Math.max(0, baseClickCps);
+  if (!timedWindows.length) {
+    const cps = safeBasePassiveCps + safeBaseClickCps;
+    return cps <= 0 ? Infinity : remainingCookies / cps;
+  }
   const breakpoints = [...new Set(timedWindows.map((window) => window.remainingSec).filter((sec) => sec > 0))]
     .sort((a, b) => a - b);
   let elapsed = 0;
@@ -228,9 +242,12 @@ function getSimulationKey(this: CookiePaybackPlanner, me: Building | Upgrade) {
     itemType,
     me.amount,
     me.bought,
+    Game.unbuffedCps,
+    Game.cookiesPsRaw,
     price,
     Math.floor(bank),
     getCookieBucket(),
+    Math.max(0, Number.isFinite(this.smoothedClickCps) ? this.smoothedClickCps : 0),
     getBuffSignature.call(this),
     this.config.sortGrandmapocalypse ? 1 : 0,
     this.config.sortWizardTower ? 1 : 0,
@@ -253,7 +270,17 @@ export function estimateWaitSeconds(
   cps: number,
   elapsedOffsetSec = 0
 ) {
-  const bank = this.getBankCookies();
+  return estimateWaitWithBank.call(this, price, cookies, cps, elapsedOffsetSec, this.getBankCookies());
+}
+
+function estimateWaitWithBank(
+  this: CookiePaybackPlanner,
+  price: number,
+  cookies: number,
+  cps: number,
+  elapsedOffsetSec: number,
+  bank: number
+) {
   const remaining = price + bank - cookies;
   if (remaining <= 0) {
     return 0;
@@ -268,6 +295,9 @@ export function estimateWaitSeconds(
   const currentClickCps = Math.max(0, Number.isFinite(this.smoothedClickCps) ? this.smoothedClickCps : 0);
   const basePassiveCps = Math.max(0, cps) / Math.max(1e-6, passiveMultNow);
   const baseClickCps = currentClickCps / Math.max(1e-6, passiveMultNow * clickMultNow);
+  if (this.performanceExperiment.optimized && this.performanceExperiment.variant === "compiled") {
+    return this.performanceExperiment.estimate(remaining, basePassiveCps, baseClickCps, timedWindows);
+  }
   return estimateWaitWithTimedWindows(remaining, basePassiveCps, baseClickCps, timedWindows);
 }
 
@@ -278,7 +308,11 @@ function percentile(values: number[], p: number) {
   return sorted[index];
 }
 
-function recordProfiler(this: CookiePaybackPlanner, durationMs: number, wasComputed: boolean) {
+function recordProfiler(this: CookiePaybackPlanner, durationMs: number, wasComputed: boolean, simulated = wasComputed) {
+  if (simulated && Number.isFinite(durationMs) && durationMs > 0) {
+    this.simulationCostMs = this.simulationCostMs > 0
+      ? this.simulationCostMs * .8 + durationMs * .2 : durationMs;
+  }
   if (!this.config.enablePerfProfiler) {
     return;
   }
@@ -311,7 +345,7 @@ function recordProfiler(this: CookiePaybackPlanner, durationMs: number, wasCompu
 }
 
 export function tuneAdaptiveBudget(this: CookiePaybackPlanner) {
-  const observed = Math.max(this.profilerLastAvgMs, this.profilerLastP95Ms * 0.6);
+  const observed = Math.max(this.simulationCostMs, this.profilerLastAvgMs, this.profilerLastP95Ms * 0.6);
   if (!Number.isFinite(observed) || observed <= 0) {
     this.adaptiveBudget = Math.max(this.minBudget, Math.min(this.maxBudget, this.simBudgetPerRefresh));
     return this.adaptiveBudget;
@@ -434,75 +468,107 @@ export function updateBestCpsAcceleration(this: CookiePaybackPlanner, me: Buildi
     });
     this.lastComputedAtByItem.set(cacheKey, Date.now());
     this.highPriorityIds.delete(cacheKey);
-    recordProfiler.call(this, performance.now() - startedAt, true);
+    recordProfiler.call(this, performance.now() - startedAt, true, false);
     return;
   }
 
   const oldCps = Game.unbuffedCps;
   const sim = this.initSimData();
-  const save = this.enterSandBox(me);
+  let temporaryTier: Upgrade | null = null;
+  let temporaryTierBought = 0;
+  const compute = () => {
+    const projected = this.performanceExperiment.productionProjectionEnabled && nativeMethods
+      && this.isIgnored === isIgnored && this.initSimData === initSimData
+      ? projectBuildingTrial(Game, me, this.getCurrentBuyCount(), Number(this.config.isBanking) * Number(this.config.bankingSeconds),
+        (price, cookies, cps, elapsed, bank) => estimateWaitWithBank.call(this, price, cookies, cps, elapsed, bank), reason => {
+          const reasons = this.performanceExperiment.projectionFallbackReasons;
+          reasons[reason] = (reasons[reason] || 0) + 1;
+        }) : undefined;
+    if (projected) {
+      // Preserve the base refresh and its achievement/mouse/lump side effects.
+      Game.CalculateGains();
+      me.BestCpsAcceleration = projected.bestCpsAcceleration;
+      me.BestBuyToAmount = projected.bestBuyToAmount;
+      me.BestWaitTime = projected.bestWaitTime;
+      this.performanceExperiment.projectionSupportedCandidates++;
+    } else {
+      const save = this.enterSandBox(me);
+      try {
+        if (me.type == "upgrade") {
+          this.calcCookieTimesCost(me.getPrice(), Game.unbuffedCps, sim);
+          me.amount++;
+          me.bought++;
+          Game.CalculateGains();
+          me.BestWaitTime = sim.waitTime + sim.paidCookies / Game.unbuffedCps;
+          if (me.BestWaitTime === 0) me.BestWaitTime = Infinity;
+          me.BestCpsAcceleration = (Game.unbuffedCps - oldCps) / me.BestWaitTime;
+        } else {
+          const building = me as Building;
+          const buyCount = this.getCurrentBuyCount();
+          let nextTierUpgrade = null as Upgrade | null;
+          let amountToUnlockTier = 0;
+          let nextTierUnlocked = false;
+          const lockedTiers = Object.values(building.tieredUpgrades || {}).filter(
+            (e) => Game.Tiers[e.tier].unlock !== -1 && e.buildingTie.bought < Game.Tiers[e.tier].unlock
+          );
+          if (lockedTiers.length) {
+            amountToUnlockTier = Game.Tiers[lockedTiers[0].tier].unlock;
+            if (amountToUnlockTier <= me.bought + 15) {
+              nextTierUpgrade = lockedTiers[0];
+              temporaryTier = nextTierUpgrade;
+              temporaryTierBought = nextTierUpgrade.bought;
+            }
+          }
 
-  if (me.type == "upgrade") {
-    this.calcCookieTimesCost(me.getPrice(), Game.unbuffedCps, sim);
-    me.amount++;
-    me.bought++;
-    Game.CalculateGains();
-    me.BestWaitTime = sim.waitTime + sim.paidCookies / Game.unbuffedCps;
-    if (me.BestWaitTime === 0) me.BestWaitTime = Infinity;
-    me.BestCpsAcceleration = (Game.unbuffedCps - oldCps) / me.BestWaitTime;
-  } else {
-    const building = me as Building;
-    const buyCount = this.getCurrentBuyCount();
-    let nextTierUpgrade = null as Upgrade | null;
-    let amountToUnlockTier = 0;
-    let nextTierUnlocked = false;
-    const lockedTiers = Object.values(building.tieredUpgrades || {}).filter(
-      (e) => Game.Tiers[e.tier].unlock !== -1 && e.buildingTie.bought < Game.Tiers[e.tier].unlock
-    );
-    if (lockedTiers.length) {
-      amountToUnlockTier = Game.Tiers[lockedTiers[0].tier].unlock;
-      if (amountToUnlockTier <= me.bought + 15) {
-        nextTierUpgrade = lockedTiers[0];
+          const maxUnitsToExplore = 50;
+          const maxSteps = Math.max(1, Math.ceil(maxUnitsToExplore / Math.max(1, buyCount)));
+          for (let step = 0; step < maxSteps; step++) {
+            const units = buyCount - building.amount % buyCount;
+            for (let i = 0; i < units; i++) {
+              this.calcCookieTimesCost(building.getPrice(), Game.unbuffedCps, sim);
+              building.amount++;
+              building.bought++;
+              Game.CalculateGains();
+            }
+            if (nextTierUpgrade && !nextTierUnlocked && building.amount >= amountToUnlockTier) {
+              this.calcCookieTimesCost(nextTierUpgrade.getPrice(), Game.unbuffedCps, sim);
+              nextTierUpgrade.bought = 1;
+              nextTierUnlocked = true;
+              Game.CalculateGains();
+            }
+            const waitTime = sim.waitTime + sim.paidCookies / Game.unbuffedCps;
+            const cpsAcceleration = (Game.unbuffedCps - oldCps) / waitTime;
+            if (cpsAcceleration > me.BestCpsAcceleration) {
+              me.BestCpsAcceleration = cpsAcceleration;
+              me.BestBuyToAmount = building.amount;
+              me.BestWaitTime = waitTime;
+            } else if (nextTierUpgrade === null || building.amount > amountToUnlockTier) {
+              break;
+            }
+          }
+        }
+      } finally {
+        if (temporaryTier) temporaryTier.bought = temporaryTierBought;
+        this.leaveSandBox(save);
       }
     }
-
-    const maxUnitsToExplore = 50;
-    const maxSteps = Math.max(1, Math.ceil(maxUnitsToExplore / Math.max(1, buyCount)));
-    for (let step = 0; step < maxSteps; step++) {
-      for (let i = 0; i < buyCount; i++) {
-        this.calcCookieTimesCost(building.getPrice(), Game.unbuffedCps, sim);
-        building.amount++;
-        building.bought++;
-        Game.CalculateGains();
-      }
-      if (nextTierUpgrade && !nextTierUnlocked && building.amount >= amountToUnlockTier) {
-        this.calcCookieTimesCost(nextTierUpgrade.getPrice(), Game.unbuffedCps, sim);
-        nextTierUpgrade.bought = 1;
-        nextTierUnlocked = true;
-        Game.CalculateGains();
-      }
-      const waitTime = sim.waitTime + sim.paidCookies / Game.unbuffedCps;
-      const cpsAcceleration = (Game.unbuffedCps - oldCps) / waitTime;
-      if (cpsAcceleration > me.BestCpsAcceleration) {
-        me.BestCpsAcceleration = cpsAcceleration;
-        me.BestBuyToAmount = building.amount;
-        me.BestWaitTime = waitTime;
-      } else if (nextTierUpgrade === null || building.amount > amountToUnlockTier) {
-        break;
-      }
-    }
-    if (nextTierUpgrade) nextTierUpgrade.bought = 0;
-  }
-  this.leaveSandBox(save);
-  this.simCache.set(cacheKey, {
-    key: simKey,
-    bestCpsAcceleration: me.BestCpsAcceleration,
-    bestBuyToAmount: me.BestBuyToAmount,
-    bestWaitTime: me.BestWaitTime,
-  });
-  this.lastComputedAtByItem.set(cacheKey, Date.now());
-  this.highPriorityIds.delete(cacheKey);
-  recordProfiler.call(this, performance.now() - startedAt, true);
+    this.simCache.set(cacheKey, {
+      key: simKey,
+      bestCpsAcceleration: me.BestCpsAcceleration,
+      bestBuyToAmount: me.BestBuyToAmount,
+      bestWaitTime: me.BestWaitTime,
+    });
+    this.lastComputedAtByItem.set(cacheKey, Date.now());
+    this.highPriorityIds.delete(cacheKey);
+    recordProfiler.call(this, performance.now() - startedAt, true);
+  };
+  const nativeMethods = this.enterSandBox === enterSandBox && this.leaveSandBox === leaveSandBox
+    && this.getCurrentBuyCount === getCurrentBuyCount && this.calcCookieTimesCost === calcCookieTimesCost
+    && this.getBankCookies === getBankCookies && this.estimateWaitSeconds === estimateWaitSeconds
+    && !this.performanceExperiment.optimized;
+  return this.performanceExperiment.buildingCpsCacheEnabled && nativeMethods
+    ? withBuildingCpsCache(Game, sandbox => sandbox(me, compute), this.performanceExperiment.buildingCpsModelEnabled,
+      (nodes, amounts) => this.performanceExperiment.acquireBuildingCpsModel(nodes, amounts)) : compute();
 }
 
 export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Building | Upgrade>) {
@@ -529,7 +595,7 @@ export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Buildin
     if (!helpers.length) return;
     for (const me of helpers) {
       const save = this.enterSandBox(me);
-
+      try {
       const sim = this.initSimData();
 
       me.timeToTargetCookie = Infinity;
@@ -554,7 +620,9 @@ export function updateHelperOrder(this: CookiePaybackPlanner, all: Array<Buildin
         this.helperAbortedByBudget++;
       }
 
-      this.leaveSandBox(save);
+      } finally {
+        this.leaveSandBox(save);
+      }
     }
 
     helpers.sort((a, b) => a.timeToTargetCookie - b.timeToTargetCookie);
@@ -583,7 +651,8 @@ export function updateColorRender(
   this.colorRender = chroma
     .scale(colorGroups.map((e) => e[0] as string))
     .mode("lab")
-    .domain(colorGroups.map((e) => e[1] as number)) as (value: number) => string;
+    .domain(colorGroups.map((e) => e[1] as number))
+    .out("hex") as (value: number) => string;
 }
 
 export function calcWaitingTime(this: CookiePaybackPlanner, me: Building | Upgrade) {
