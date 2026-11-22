@@ -1,6 +1,7 @@
 {
   "name": "cookie-payback-planner",
   "version": "1.0.0",
+  "packageManager": "yarn@1.22.22",
   "description": "✔️ **Achievements are NOT disabled** when using this mod.",
   "main": "dist/main.js",
   "scripts": {
@@ -34,7 +35,6 @@
   },
   "homepage": "https://github.com/cometjc/Cookie-Payback-Planner#readme",
   "devDependencies": {
-    "@esbuild/win32-x64": "^0.27.2",
     "@types/node": "^25.0.8",
     "esbuild": "^0.27.2",
     "husky": "^9.1.7",

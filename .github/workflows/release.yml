@@ -5,24 +5,35 @@ on:
     tags:
       - '*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ github.ref_name }}
     steps:
-      - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
-      - run: echo "🐧 This job is now running on a ${{ runner.os }} server hosted by GitHub!"
-      - run: echo "🔎 The name of your branch is ${{ github.ref }} and your repository is ${{ github.repository }}."
-      - name: Check out repository code
-        uses: actions/checkout@v2
-      - name: Set env
-        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-      - run: npm ci
-      - run: npm run build
-      - run: mkdir BestDealHelper
-      - run: cp -v CHANGELOG.md info.txt chroma.min.js BestDealHelper/
-      - run: cp -v dist/main.js BestDealHelper/main.js
-      - run: touch BestDealHelper/Ver_${RELEASE_VERSION}
-      - run: zip -r BestDealHelper-${RELEASE_VERSION}.zip BestDealHelper
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - name: Verify release version
+        run: node -e "const fs = require('node:fs'); if (String(JSON.parse(fs.readFileSync('info.txt', 'utf8')).ModVersion) !== process.env.RELEASE_VERSION) throw Error('Tag and ModVersion differ');"
+      - run: yarn typecheck
+      - run: yarn lint:src
+      - run: yarn test:run
+      - run: node --test scripts/*.test.mjs scripts/perf/*.test.mjs
+      - run: yarn build
+      - name: Package mod
+        run: |
+          mkdir BestDealHelper
+          cp CHANGELOG.md info.txt thumbnail.png BestDealHelper/
+          cp dist/main.js BestDealHelper/main.js
+          touch "BestDealHelper/Ver_${RELEASE_VERSION}"
+          zip -r "BestDealHelper-${RELEASE_VERSION}.zip" BestDealHelper
       - uses: ncipollo/release-action@v1
         with:
           name: Release ${{ env.RELEASE_VERSION }}

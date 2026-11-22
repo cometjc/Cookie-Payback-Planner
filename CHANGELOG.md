@@ -3,7 +3,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [2053.01] - 2026-11-23
 ### Fix
 - Validate deferred-gains native bulk prices against each step's bank reserve before buying; projected building trials also fill the next ownership multiple.
 - Bulk auto-buy preflight tracks the remaining cookie balance, then restores it, so balance-dependent prices cannot be checked against an unspent balance.
@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Skip intermediate production only when the guarded model proves the whole batch affordable, including bank reserves.
 - Optional experimental bulk100 approximation skips only affordable steps; strict calculation remains the default, with native audits and mismatch diagnostics.
 - Add isolated profiling, purchase observation, unlock probes and repeatable Windows commands.
+- Avoid redundant store node moves, notation text replacement and color calculations.
+- Reject unsupported upgrade records, inherited accessors and aliased effect owners before projection.
+### Release
+- Build release archives with the existing Yarn lockfile and platform-selected esbuild binary; run source and profiling-tool checks in CI.
 
 ## [2053.4] - 2026.03.01
 ### Improve

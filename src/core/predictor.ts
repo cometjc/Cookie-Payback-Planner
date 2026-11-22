@@ -111,7 +111,7 @@ export class CookiePaybackPlanner {
   displayname = "Cookie Payback Planner";
   name = "Best Deal Helper";
   modId = "BestDealHelper";
-  version = "2048.14";
+  version = "2053.01";
   isLoaded = false;
   isDisposed = false;
   isReloading = false;

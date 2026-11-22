@@ -1350,3 +1350,11 @@ analyzer逐筆核對新版1,110筆原始updateUI耗時，全部finite且≤100ms
 raw及final-assessment：tmp/final-strict-natural/1795324208806；runner tmp/final-strict-natural.mjs、凍結入口tmp/build-final-strict-natural.mjs、逐筆assert入口tmp/assess-final-strict-natural.mjs，session37020 exit0、所有owned正常關閉，正式主程序0。正式bundle／metadata讀回與部署receipt一致，本輪未改部署或回寫正式存檔。新版SHA256 f73c7340eb15571b4cb92fa14c2846847498c6c0331dcb97183f99e5db2091e8，舊版95b261d53b4b0a434637e79da3ad0d0c8c67aa9d34e52f659346d1eb10204266。
 
 採樣結束後fresh dev.ps1 check exit0：TypeScript、lint0 errors／1既有warning、202來源及101工具測試通過。dev.ps1 build exit0，410.4kb；重建hash與正式2054.11一致。e4bf07f相對10691f6的src／scripts差異為空；本階段只更新驗收文件與正常hook metadata，不重部署文件commit的版本號。未知遊戲版本／來源／效果維持原生回退；不保證未測存檔、未來版本或任意第三方模組皆≤100ms。
+
+### 2053.01發布建置核對（2026-11-23）
+
+使用者指定正式tag／ModVersion／runtime version為2053.01，GameVersion維持2.053。以既有Yarn frozen lock安裝獨立worktree依賴，移除root Windows-only esbuild依賴，保留esbuild的optional平台選擇；CI改Node22／Yarn1.22.22並納入來源／工具檢查。local dev.ps1 check／build exit0：202來源／101工具、typecheck、lint0errors／1既有warning。local bundled Node實際為24.22.1；Linux Node22結果須由遠端CI另證。
+
+新bundle 88e15251a64ad3fdbc0791e6b4667af22709df322d7e9b4924c38fa0708ea904；將前次已驗bundle的worktree依賴路徑../../node_modules/統一為node_modules/、runtime version改2053.01後，逐byte等於新bundle，沒有其他程式變動。16mods／四buff／bulk1/10/100／amount123/199/200的36對在固定寬裕搜尋budget下，全item／已記錄native outputs／notation exact、前三與購買決策一致；未實購。raw tmp/release-2053-01-deterministic-quality.json，runner同名.mjs，session67508 exit0、owned關閉；等價與品質摘要tmp/release-2053-01-verification.json。此為品質核對，不重稱為2053.01自然量測。
+
+先前使用原搜尋budget的試跑於第8對失配：item數值及非notation native outputs相同，但baseline搜尋timeout、投影未timeout，導致策略前三／顏色不同。保留tmp/release-2053-01-quality.json及同名runner，session2035 exit1、owned正常關閉。固定budget核對只用於隔離計算等價，不變更玩家設定；已於Release說明time-budgeted策略在負載下可能選不同路徑，不把該初次失配隱藏為全部通過。
