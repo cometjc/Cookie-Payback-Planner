@@ -35,6 +35,12 @@ git push --atomic origin main refs/tags/2053.01
 3. 在正式遊戲開啟「管理模組 → 發布模組 → 更新已發布模組」，選擇工坊 `2689045003`、上述上傳目錄，提交更新。可透過該視窗使用的原生 Steam IPC 執行相同流程：先 `get published mods` 核對擁有項目，再 `select mod` 核對目錄，最後 `publish mod` 明確指定 update=`2689045003`。授權只更新此項目，不建立重複項目。此版遊戲的更新視窗沒有 changelog 欄位，不能把 Release 說明誤稱為已同步至工坊。
 4. 等待遊戲回報發布完成；核對工坊更新時間。若另有編輯工坊changelog，獨立記錄其結果。保存實際發布回覆、內容 hash、tag／CI／工坊連結於本機 ignored `tmp/`。沒有成功回覆或無法核對時，保留續接點，不宣稱發布成功。
 
+### 縮圖FileShare失敗
+
+若ZIP分享成功、`thumbnail.png`上傳顯示OK但FileShare回File Not Found，工坊內容更新尚未執行。先保存callback與遮蔽後Steam Cloud日誌；不能把泛用錯誤當成本機缺檔或配額不足。
+
+本版Greenworks高階`ugcPublishUpdate`會一律讀取圖片參數，直接刪縮圖或傳空字串可能改報讀檔錯誤。低階`updatePublishedWorkshopFile`才明確支援空image_path保留原預覽圖；可在ZIP存入Cloud並分享成功後只更新內容。現有遊戲發布IPC沒有這個選項，此替代尚未live驗證。詳見[調查與驗證限制](workshop-publish-investigation.md)。
+
 ## 收尾
 
 刪除前先確認分支已合併、沒有唯一工作；保留未合併備份。含 ignored 量測資料的工作樹先保全資料，可保留為 detached checkout。發布完成後核對 main／tag／Release／工坊版本，回報實際檢查結果及限制。
